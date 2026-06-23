@@ -11,6 +11,10 @@ import httpx
 class ProviderError(RuntimeError):
     """A safe provider error without request secrets or provider payloads."""
 
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass(frozen=True)
 class Usage:
@@ -59,7 +63,11 @@ async def chat_completion(
         raise ProviderError("Could not reach the configured model provider") from exc
 
     if response.status_code >= 400:
-        raise ProviderError(f"Model provider returned HTTP {response.status_code}")
+        if response.status_code == 429:
+            retry_after = response.headers.get("retry-after")
+            suffix = f" Retry after {retry_after} seconds." if retry_after and retry_after.isdecimal() else " Retry later."
+            raise ProviderError(f"Model provider rate limited the request.{suffix}", status_code=429)
+        raise ProviderError(f"Model provider returned HTTP {response.status_code}", status_code=response.status_code)
 
     try:
         payload: dict[str, Any] = response.json()

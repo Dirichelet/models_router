@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,6 +20,7 @@ os.environ["TRUSTED_HOSTS"] = "testserver"
 
 from app import main as application  # noqa: E402
 from app.provider import Completion, Usage  # noqa: E402
+from app.provider import ProviderError, chat_completion  # noqa: E402
 
 
 def client() -> TestClient:
@@ -304,3 +306,43 @@ def test_audit_records_and_statistics_are_scoped_to_the_current_user() -> None:
         with application.database.connection() as connection:
             remaining = connection.execute("SELECT COUNT(*) AS count FROM calls WHERE user_id = ?", (other_user_id,)).fetchone()
         assert remaining["count"] == 1
+
+
+def test_provider_rate_limit_is_safe_and_includes_retry_guidance(monkeypatch) -> None:
+    class Response:
+        status_code = 429
+        headers = {"retry-after": "20"}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return Response()
+
+    captured = {}
+
+    def client_factory(**kwargs):
+        captured.update(kwargs)
+        return Client()
+
+    monkeypatch.setattr("app.provider.httpx.AsyncClient", client_factory)
+    try:
+        asyncio.run(
+            chat_completion(
+                base_url="https://provider.example/v1",
+                api_key="not-in-error-message",
+                model_name="example/model",
+                messages=[{"role": "user", "content": "test"}],
+            )
+        )
+    except ProviderError as error:
+        assert error.status_code == 429
+        assert str(error) == "Model provider rate limited the request. Retry after 20 seconds."
+        assert "not-in-error-message" not in str(error)
+    else:
+        raise AssertionError("Expected ProviderError")
+    assert captured["trust_env"] is False
