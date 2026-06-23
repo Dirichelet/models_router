@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -100,6 +101,11 @@ login_limiter = LoginRateLimiter()
 class Credentials(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=12, max_length=256)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
 
 
 class ModelCreate(BaseModel):
@@ -202,7 +208,8 @@ def csrf_user(
     user: Annotated[dict[str, Any], Depends(current_user)],
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> dict[str, Any]:
-    if not csrf_token or not hashlib.sha256(csrf_token.encode("utf-8")).hexdigest() == user["csrf_hash"]:
+    provided_hash = hashlib.sha256(csrf_token.encode("utf-8")).hexdigest() if csrf_token else ""
+    if not csrf_token or not hmac.compare_digest(provided_hash, user["csrf_hash"]):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CSRF token")
     return user
 
@@ -420,6 +427,23 @@ def logout(
 @app.get("/api/auth/me")
 def me(user: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]:
     return {"id": user["id"], "username": user["username"]}
+
+
+@app.put("/api/auth/password")
+def change_password(
+    change: PasswordChange,
+    response: Response,
+    user: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> dict[str, str]:
+    if hmac.compare_digest(change.current_password, change.new_password):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="New password must differ from the current password")
+    with database.connection() as connection:
+        account = connection.execute("SELECT password_hash FROM users WHERE id = ?", (user["id"],)).fetchone()
+        if not account or not PasswordHasher.verify(change.current_password, account["password_hash"]):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+        connection.execute("UPDATE users SET password_hash = ? WHERE id = ?", (PasswordHasher.hash(change.new_password), user["id"]))
+        connection.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
+    return {"csrf_token": _set_session(response, int(user["id"]))}
 
 
 @app.get("/api/models")

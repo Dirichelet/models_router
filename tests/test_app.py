@@ -139,3 +139,25 @@ def test_missing_provider_usage_is_not_reported_as_actual_cost(monkeypatch) -> N
         assert audit[0]["cost_known"] == 0
         stats = test_client.get("/api/stats").json()
         assert stats["unknown_cost_calls"] == 1
+
+
+def test_password_change_invalidates_old_sessions_and_reissues_csrf() -> None:
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        response = test_client.put(
+            "/api/auth/password",
+            headers=headers,
+            json={"current_password": "a-secure-password", "new_password": "an-even-better-password"},
+        )
+        assert response.status_code == 200, response.text
+        replacement_headers = {"X-CSRF-Token": response.json()["csrf_token"]}
+        assert replacement_headers["X-CSRF-Token"] != headers["X-CSRF-Token"]
+        assert test_client.get("/api/auth/me").status_code == 200
+
+        test_client.post("/api/auth/logout", headers=replacement_headers)
+        assert test_client.post(
+            "/api/auth/login", json={"username": "admin", "password": "a-secure-password"}
+        ).status_code == 401
+        assert test_client.post(
+            "/api/auth/login", json={"username": "admin", "password": "an-even-better-password"}
+        ).status_code == 200

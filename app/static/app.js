@@ -156,6 +156,24 @@ $("#logout-button").addEventListener("click", async () => {
   try { await api("/api/auth/logout", { method: "POST" }); } finally { showAuth(); await initialise(); }
 });
 
+$("#change-password-button").addEventListener("click", () => {
+  $("#password-form").reset();
+  $("#password-message").textContent = "";
+  $("#password-dialog").showModal();
+});
+$("#close-password-dialog").addEventListener("click", () => $("#password-dialog").close());
+$("#password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = $("#password-message");
+  message.textContent = "";
+  try {
+    const result = await api("/api/auth/password", { method: "PUT", body: JSON.stringify({ current_password: $("#current-password").value, new_password: $("#new-password").value }) });
+    state.csrfToken = result.csrf_token;
+    $("#password-dialog").close();
+    setMessage("密码已更新，其他登录会话已失效。", "success");
+  } catch (error) { message.textContent = error.message; }
+});
+
 $("#model-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const id = Number($("#model-id").value);
