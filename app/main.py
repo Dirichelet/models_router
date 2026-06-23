@@ -653,6 +653,24 @@ def stats(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]
     return dict(row)
 
 
+@app.get("/api/evaluation")
+def evaluation_signals(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, int]:
+    """Expose operational quality signals without claiming unlabelled semantic accuracy."""
+    with database.connection() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN kind = 'chat' THEN 1 ELSE 0 END) AS chat_calls,
+                SUM(CASE WHEN kind = 'chat' AND status = 'succeeded' THEN 1 ELSE 0 END) AS successful_chat_calls,
+                SUM(CASE WHEN kind = 'chat' AND error_message LIKE 'Automated de-identification check%' THEN 1 ELSE 0 END) AS privacy_blocks,
+                SUM(CASE WHEN kind = 'chat' AND routing_reason LIKE 'Router response was invalid%' THEN 1 ELSE 0 END) AS routing_fallbacks,
+                SUM(CASE WHEN kind = 'chat' AND status = 'succeeded' AND cost_known = 1 THEN 1 ELSE 0 END) AS known_cost_chat_calls
+            FROM calls
+            """
+        ).fetchone()
+    return {key: int(value or 0) for key, value in dict(row).items()}
+
+
 @app.post("/api/chat")
 async def chat(
     payload: ChatRequest,

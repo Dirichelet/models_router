@@ -35,8 +35,23 @@ function showApp(user) {
   $("#current-user").textContent = user.username;
 }
 
+function percentage(part, total) {
+  return total ? `${Math.round((part / total) * 100)}%` : "—";
+}
+
+function renderEvaluation(evaluation) {
+  const successful = evaluation.successful_chat_calls || 0;
+  const compliantRoutes = Math.max(0, successful - (evaluation.routing_fallbacks || 0));
+  $("#signal-privacy").textContent = evaluation.privacy_blocks || 0;
+  $("#signal-privacy-note").textContent = `${evaluation.privacy_blocks || 0} / ${evaluation.chat_calls || 0} 聊天调用被安全阻断`;
+  $("#signal-routing").textContent = percentage(compliantRoutes, successful);
+  $("#signal-routing-note").textContent = `${evaluation.routing_fallbacks || 0} 次使用最低价回退`;
+  $("#signal-cost").textContent = percentage(evaluation.known_cost_chat_calls || 0, successful);
+  $("#signal-cost-note").textContent = `${evaluation.known_cost_chat_calls || 0} / ${successful} 成功调用可核验`;
+}
+
 async function loadDashboard() {
-  const [models, rules, calls, stats] = await Promise.all([api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats")]);
+  const [models, rules, calls, stats, evaluation] = await Promise.all([api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation")]);
   state.models = models;
   renderModels();
   renderCalls(calls);
@@ -46,6 +61,7 @@ async function loadDashboard() {
   $("#metric-success").textContent = stats.successful_calls || 0;
   $("#metric-cost").textContent = `$${Number(stats.total_cost || 0).toFixed(6)}`;
   $("#metric-cost-note").textContent = stats.unknown_cost_calls ? `${stats.unknown_cost_calls} 条调用未返回完整 usage` : "";
+  renderEvaluation(evaluation);
 }
 
 function renderModels() {
@@ -116,12 +132,13 @@ function appendPipeline(result) {
 }
 
 async function refreshCalls() {
-  const [calls, stats] = await Promise.all([api("/api/calls"), api("/api/stats")]);
+  const [calls, stats, evaluation] = await Promise.all([api("/api/calls"), api("/api/stats"), api("/api/evaluation")]);
   renderCalls(calls);
   $("#metric-calls").textContent = stats.total_calls || 0;
   $("#metric-success").textContent = stats.successful_calls || 0;
   $("#metric-cost").textContent = `$${Number(stats.total_cost || 0).toFixed(6)}`;
   $("#metric-cost-note").textContent = stats.unknown_cost_calls ? `${stats.unknown_cost_calls} 条调用未返回完整 usage` : "";
+  renderEvaluation(evaluation);
 }
 
 async function initialise() {

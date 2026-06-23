@@ -86,6 +86,14 @@ def test_chat_redacts_before_target_and_records_only_redacted_content(monkeypatc
         assert audit[0]["redacted_message"] == payload["redacted_message"]
         assert original_message not in str(audit)
         assert audit[0]["total_cost"] == 0.00012
+        evaluation = test_client.get("/api/evaluation").json()
+        assert evaluation == {
+            "chat_calls": 1,
+            "successful_chat_calls": 1,
+            "privacy_blocks": 0,
+            "routing_fallbacks": 0,
+            "known_cost_chat_calls": 1,
+        }
 
 
 def test_privacy_guard_stops_a_leaky_redactor_before_routing_or_target(monkeypatch) -> None:
@@ -113,6 +121,7 @@ def test_privacy_guard_stops_a_leaky_redactor_before_routing_or_target(monkeypat
         assert audit[0]["status"] == "failed"
         assert audit[0]["redacted_message"] is None
         assert original_message not in str(audit)
+        assert test_client.get("/api/evaluation").json()["privacy_blocks"] == 1
 
 
 def test_missing_provider_usage_is_not_reported_as_actual_cost(monkeypatch) -> None:
