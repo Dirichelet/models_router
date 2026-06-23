@@ -422,3 +422,63 @@ def test_multiple_selected_target_models_can_be_created_together() -> None:
         assert response.status_code == 201, response.text
         assert [model["model_name"] for model in response.json()["models"]] == ["provider/alpha", "provider/beta"]
         assert test_client.get("/api/pipeline/status").json()["active_targets"] == 2
+
+
+def test_openai_compatible_service_api_routes_agent_messages(monkeypatch) -> None:
+    completions = iter(
+        (
+            Completion("[SYSTEM]\nUse concise answers.\n\n[USER]\nQuestion about [PERSON].", Usage(10, 5)),
+            Completion('{"model_id": 3, "reason": "Suitable."}', Usage(10, 5)),
+            Completion("Agent-compatible answer.", Usage(10, 5)),
+        )
+    )
+
+    provider_requests = []
+
+    async def fake_completion(**kwargs):
+        provider_requests.append(kwargs)
+        return next(completions)
+
+    monkeypatch.setattr(application, "chat_completion", fake_completion)
+    with client() as test_client:
+        csrf = bootstrap(test_client)
+        for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
+            assert test_client.post("/api/models", headers=csrf, json=model_payload(name, role)).status_code == 201
+        created_key = test_client.post("/api/service-key", headers=csrf)
+        assert created_key.status_code == 201
+        api_headers = {"Authorization": f"Bearer {created_key.json()['api_key']}"}
+
+        listed = test_client.get("/v1/models", headers=api_headers)
+        assert listed.status_code == 200
+        assert listed.json()["data"][0]["id"] == "models-router"
+
+        response = test_client.post(
+            "/v1/chat/completions",
+            headers=api_headers,
+            json={
+                "model": "models-router",
+                "messages": [
+                    {"role": "system", "content": "Use concise answers."},
+                    {"role": "user", "content": [{"type": "text", "text": "Question about Alice"}]},
+                    {"role": "tool", "content": "Lookup result: reference data"},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["object"] == "chat.completion"
+        assert payload["choices"][0]["message"] == {"role": "assistant", "content": "Agent-compatible answer."}
+        assert payload["usage"]["total_tokens"] == 30
+        assert "[SYSTEM]\nUse concise answers." in provider_requests[0]["messages"][1]["content"]
+        assert "[TOOL]\nLookup result: reference data" in provider_requests[0]["messages"][1]["content"]
+
+        streaming = test_client.post(
+            "/v1/chat/completions",
+            headers=api_headers,
+            json={"model": "models-router", "stream": True, "messages": [{"role": "user", "content": "Hello"}]},
+        )
+        assert streaming.status_code == 400
+
+        revoked = test_client.delete("/api/service-key", headers=csrf)
+        assert revoked.json() == {"revoked": True}
+        assert test_client.get("/v1/models", headers=api_headers).status_code == 401

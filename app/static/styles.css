@@ -69,6 +69,12 @@ textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
 .panel-heading { justify-content: space-between; gap: 14px; margin-bottom: 20px; }
 .panel-copy { max-width: 760px; margin: 8px 0 0; color: var(--muted); font-size: .82rem; font-weight: 500; line-height: 1.55; }
 .panel-copy code { color: var(--blue); }
+.service-api-panel { display: grid; gap: 18px; }.service-api-panel .panel-heading { margin-bottom: 0; }
+.api-endpoint, .service-key-status, .service-key-reveal, .api-example { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(5, 16, 30, .34); }
+.api-endpoint { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.api-endpoint span { color: var(--muted); font-size: .8rem; }.api-endpoint code { color: var(--green); overflow-wrap: anywhere; }
+.service-key-status { color: var(--muted); font-size: .84rem; }.service-key-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.service-key-reveal { border-color: rgba(255, 190, 92, .45); color: #ffd28d; }.service-key-reveal p { margin: 0 0 10px; font-size: .8rem; }.service-key-reveal > div { display: flex; align-items: center; gap: 10px; }.service-key-reveal code { min-width: 0; flex: 1; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.api-example { overflow-x: auto; }.api-example .eyebrow { margin-bottom: 10px; }.api-example pre { margin: 0; color: #c9dbef; font-size: .78rem; line-height: 1.55; white-space: pre-wrap; }
 .status-pill { border: 1px solid rgba(55,216,158,.35); border-radius: 999px; padding: 6px 10px; color: var(--green); font-size: .72rem; font-weight: 700; white-space: nowrap; }
 .status-pill.warning { border-color: rgba(255, 190, 92, .42); color: #ffc36a; }
 .chat-panel { display: grid; grid-template-rows: auto 1fr auto; min-height: 510px; }

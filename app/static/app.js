@@ -69,9 +69,24 @@ function renderPipelineStatus(pipeline) {
   }
 }
 
+function renderServiceApi(keyStatus) {
+  const baseUrl = `${window.location.origin}/v1`;
+  $("#service-api-base-url").textContent = baseUrl;
+  $("#service-api-example").textContent = [
+    `curl ${baseUrl}/chat/completions \\`,
+    "  -H 'Authorization: Bearer <YOUR_MODELS_ROUTER_KEY>' \\",
+    "  -H 'Content-Type: application/json' \\",
+    "  -d '{\"model\":\"models-router\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}'",
+  ].join("\n");
+  $("#service-key-status").textContent = keyStatus.active
+    ? `服务 API Key 已启用：${keyStatus.prefix}（创建于 ${new Date(keyStatus.created_at).toLocaleString()}）`
+    : "尚未生成服务 API Key。外部 Agent 和 Chat 客户端无法调用服务。";
+  $("#revoke-service-key").disabled = !keyStatus.active;
+}
+
 async function loadDashboard() {
-  const [models, rules, calls, stats, evaluation, pipeline] = await Promise.all([
-    api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation"), api("/api/pipeline/status"),
+  const [models, rules, calls, stats, evaluation, pipeline, serviceKey] = await Promise.all([
+    api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation"), api("/api/pipeline/status"), api("/api/service-key"),
   ]);
   state.models = models;
   renderModels();
@@ -84,6 +99,7 @@ async function loadDashboard() {
   $("#metric-cost-note").textContent = stats.unknown_cost_calls ? `${stats.unknown_cost_calls} 条调用未返回完整 usage` : "";
   renderEvaluation(evaluation);
   renderPipelineStatus(pipeline);
+  renderServiceApi(serviceKey);
 }
 
 function renderModels() {
@@ -343,6 +359,30 @@ $("#reset-model-form").addEventListener("click", resetModelForm);
 $("#restore-default-rules").addEventListener("click", async () => {
   if (!confirm("将用推荐规则覆盖当前编辑框内容；需点击“保存规则”才会生效。")) return;
   try { const defaults = await api("/api/rules/defaults"); $("#redaction-rule").value = defaults.redaction; $("#routing-rule").value = defaults.routing; setMessage("已填入推荐规则，请检查后保存。", "success"); } catch (error) { setMessage(error.message); }
+});
+$("#create-service-key").addEventListener("click", async () => {
+  if (!confirm("生成新 Key 会立即使旧 Key 失效，是否继续？")) return;
+  try {
+    const result = await api("/api/service-key", { method: "POST" });
+    $("#service-key-value").textContent = result.api_key;
+    $("#service-key-reveal").hidden = false;
+    renderServiceApi(await api("/api/service-key"));
+    setMessage("服务 API Key 已生成，请立即复制。", "success");
+  } catch (error) { setMessage(error.message); }
+});
+$("#revoke-service-key").addEventListener("click", async () => {
+  if (!confirm("撤销后，所有使用该 Key 的 Agent 与外部客户端都会立即失效。是否继续？")) return;
+  try {
+    await api("/api/service-key", { method: "DELETE" });
+    $("#service-key-reveal").hidden = true;
+    renderServiceApi(await api("/api/service-key"));
+    setMessage("服务 API Key 已撤销。", "success");
+  } catch (error) { setMessage(error.message); }
+});
+$("#copy-service-key").addEventListener("click", async () => {
+  const key = $("#service-key-value").textContent;
+  if (!key) return;
+  try { await navigator.clipboard.writeText(key); setMessage("服务 API Key 已复制。", "success"); } catch (_) { setMessage("浏览器未允许自动复制，请手动复制 Key。", "error"); }
 });
 $("#rules-form").addEventListener("submit", async (event) => { event.preventDefault(); try { await api("/api/rules", { method: "PUT", body: JSON.stringify({ redaction: $("#redaction-rule").value, routing: $("#routing-rule").value }) }); setMessage("规则已保存。", "success"); } catch (error) { setMessage(error.message); } });
 $("#chat-form").addEventListener("submit", async (event) => {

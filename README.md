@@ -29,6 +29,30 @@ uv run python main.py
 
 原始消息不会写进审计记录；如需删除已保存的脱敏内容和消费记录，可在“最近调用”区域点击“清除记录”。
 
+## 供其他 Agent / Chat 客户端调用
+
+在网页的“服务 API”页签生成专用 API Key。完整 Key 只显示一次，妥善保存。然后将其他客户端的 OpenAI Base URL 指向本服务的 `/v1`：本地开发示例为 `http://127.0.0.1:9898/v1`。
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:9898/v1",
+    api_key="mr_从服务API页面生成的Key",
+)
+
+response = client.chat.completions.create(
+    model="models-router",
+    messages=[
+        {"role": "system", "content": "你是一个简洁的助手。"},
+        {"role": "user", "content": "请总结这段内容。"},
+    ],
+)
+print(response.choices[0].message.content)
+```
+
+服务实现了 `GET /v1/models` 和非流式 `POST /v1/chat/completions`，返回标准 `choices[0].message.content` 与 `usage`。文本内容数组、`system`、`assistant` 和 `tool` 消息会作为脱敏后的对话上下文处理；暂不支持 `stream=true` 或服务端工具执行。
+
 ## 公网部署（Docker Compose）
 
 1. 复制环境变量模板并设置公网域名、ACME 邮箱、新的 `FERNET_KEY` 与随机 `BOOTSTRAP_TOKEN`：

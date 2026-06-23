@@ -35,6 +35,7 @@
           <button class="nav-item" data-view-target="rules" type="button">提示词规则</button>
           <button class="nav-item" data-view-target="audit" type="button">调用审计</button>
           <button class="nav-item" data-view-target="evaluation" type="button">质量评估</button>
+          <button class="nav-item" data-view-target="service-api" type="button">服务 API</button>
         </nav>
 
         <div id="app-message" class="app-message" role="status"></div>
@@ -97,6 +98,18 @@
             <article class="signal-card"><span>路由结构合规</span><strong id="signal-routing">—</strong><small id="signal-routing-note" class="muted">暂无成功调用</small></article>
             <article class="signal-card"><span>成本可核验</span><strong id="signal-cost">—</strong><small id="signal-cost-note" class="muted">暂无成功调用</small></article>
           </section>
+        </section>
+
+        <section class="app-view" data-view="service-api" hidden>
+          <article class="panel service-api-panel">
+            <div class="panel-heading"><div><p class="eyebrow">OPENAI-COMPATIBLE API</p><h2>供 Agent 与外部 Chat 客户端调用</h2><p class="panel-copy">使用专用 API Key 调用本服务的 <code>/v1/chat/completions</code>。请求会经过脱敏、路由和目标模型链路，并在当前账户审计中记录。</p></div></div>
+            <div class="api-endpoint"><span>Base URL</span><code id="service-api-base-url"></code></div>
+            <div id="service-key-status" class="service-key-status">正在检查服务 API Key 状态…</div>
+            <div class="service-key-actions"><button id="create-service-key" class="primary" type="button">生成 / 轮换 API Key</button><button id="revoke-service-key" class="ghost danger" type="button">撤销 API Key</button></div>
+            <div id="service-key-reveal" class="service-key-reveal" hidden><p>请立即复制。为安全起见，此完整 Key 仅显示这一次。</p><div><code id="service-key-value"></code><button id="copy-service-key" class="ghost" type="button">复制</button></div></div>
+            <div class="api-example"><p class="eyebrow">CHAT COMPLETIONS 示例</p><pre><code id="service-api-example"></code></pre></div>
+            <p class="field-hint">支持标准非流式 <code>messages</code>（字符串或文本内容数组）。目前不支持 <code>stream=true</code> 或服务端工具执行。</p>
+          </article>
         </section>
 
         <dialog id="password-dialog" class="password-dialog" aria-labelledby="password-title"><form id="password-form" class="stacked-form"><div class="panel-heading"><h2 id="password-title">修改密码</h2><button id="close-password-dialog" class="ghost" type="button">关闭</button></div><label>当前密码<input id="current-password" type="password" minlength="1" maxlength="256" required autocomplete="current-password"></label><label>新密码<input id="new-password" type="password" minlength="12" maxlength="256" required autocomplete="new-password"><span class="field-hint">12–15 位需含至少三类字符；16 位以上可使用长密码短语。</span></label><p id="password-message" class="form-message" role="status"></p><button class="primary" type="submit">更新密码并使旧会话失效</button></form></dialog>

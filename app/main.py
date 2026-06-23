@@ -8,6 +8,8 @@ import json
 import logging
 import re
 import sqlite3
+import time
+import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -201,6 +203,19 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20_000)
 
 
+class OpenAIMessage(BaseModel):
+    role: str = Field(min_length=1, max_length=32)
+    content: str | list[dict[str, Any]] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+
+
+class OpenAIChatCompletionRequest(BaseModel):
+    model: str = Field(default="models-router", min_length=1, max_length=200)
+    messages: list[OpenAIMessage] = Field(min_length=1, max_length=100)
+    stream: bool = False
+    temperature: float | None = Field(default=None, ge=0, le=2)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.initialize()
@@ -229,6 +244,14 @@ def _unauthorized() -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
 
+def _service_api_unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid service API key",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 def current_user(request: Request) -> dict[str, Any]:
     raw_token = request.cookies.get(SESSION_COOKIE)
     if not raw_token:
@@ -249,6 +272,57 @@ def current_user(request: Request) -> dict[str, Any]:
             connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(raw_token),))
             raise _unauthorized()
         return dict(row)
+
+
+def service_api_user(authorization: Annotated[str | None, Header(alias="Authorization")] = None) -> dict[str, Any]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise _service_api_unauthorized()
+    raw_key = authorization.removeprefix("Bearer ").strip()
+    if not raw_key.startswith("mr_"):
+        raise _service_api_unauthorized()
+    with database.connection() as connection:
+        row = connection.execute(
+            """
+            SELECT users.id, users.username
+            FROM service_api_keys JOIN users ON users.id = service_api_keys.user_id
+            WHERE service_api_keys.key_hash = ?
+            """,
+            (token_hash(raw_key),),
+        ).fetchone()
+    if not row:
+        raise _service_api_unauthorized()
+    return dict(row)
+
+
+def _openai_content_to_text(content: str | list[dict[str, Any]] | None) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text") or part.get("input_text") or part.get("output_text")
+        if isinstance(text, str):
+            parts.append(text)
+        elif isinstance(text, dict) and isinstance(text.get("value"), str):
+            parts.append(text["value"])
+    return "\n".join(parts).strip()
+
+
+def _openai_messages_to_conversation(messages: list[OpenAIMessage]) -> str:
+    rendered: list[str] = []
+    for message in messages:
+        content = _openai_content_to_text(message.content)
+        if not content and message.tool_calls:
+            content = f"Tool calls requested: {json.dumps(message.tool_calls, ensure_ascii=False)}"
+        if content:
+            rendered.append(f"[{message.role.upper()}]\n{content}")
+    conversation = "\n\n".join(rendered).strip()
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="messages must contain text content")
+    return conversation
 
 
 def csrf_user(
@@ -524,6 +598,35 @@ def refresh_csrf_token(
     if updated != 1:
         raise _unauthorized()
     return {"csrf_token": csrf_token}
+
+
+@app.get("/api/service-key")
+def service_key_status(user: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]:
+    with database.connection() as connection:
+        row = connection.execute(
+            "SELECT key_prefix, created_at FROM service_api_keys WHERE user_id = ?", (user["id"],)
+        ).fetchone()
+    return {"active": bool(row), "prefix": row["key_prefix"] if row else None, "created_at": row["created_at"] if row else None}
+
+
+@app.post("/api/service-key", status_code=status.HTTP_201_CREATED)
+def create_service_key(user: Annotated[dict[str, Any], Depends(csrf_user)]) -> dict[str, str]:
+    raw_key = f"mr_{new_token()}"
+    prefix = f"{raw_key[:14]}…"
+    with database.connection() as connection:
+        connection.execute("DELETE FROM service_api_keys WHERE user_id = ?", (user["id"],))
+        connection.execute(
+            "INSERT INTO service_api_keys(key_hash, key_prefix, user_id, created_at) VALUES (?, ?, ?, ?)",
+            (token_hash(raw_key), prefix, user["id"], utc_text()),
+        )
+    return {"api_key": raw_key, "prefix": prefix}
+
+
+@app.delete("/api/service-key")
+def revoke_service_key(user: Annotated[dict[str, Any], Depends(csrf_user)]) -> dict[str, bool]:
+    with database.connection() as connection:
+        revoked = connection.execute("DELETE FROM service_api_keys WHERE user_id = ?", (user["id"],)).rowcount > 0
+    return {"revoked": revoked}
 
 
 @app.put("/api/auth/password")
@@ -947,3 +1050,49 @@ async def chat(
             total_cost=round(total_cost, 8), cost_known=cost_known, status_name="failed", error_message="Unexpected pipeline failure",
         )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected pipeline failure") from exc
+
+
+@app.get("/v1/models")
+def openai_models(_: Annotated[dict[str, Any], Depends(service_api_user)]) -> dict[str, Any]:
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "models-router",
+                "object": "model",
+                "created": 0,
+                "owned_by": "models-router",
+            }
+        ],
+    }
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(
+    payload: OpenAIChatCompletionRequest,
+    user: Annotated[dict[str, Any], Depends(service_api_user)],
+) -> dict[str, Any]:
+    if payload.stream:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="stream=true is not supported yet; use a non-streaming OpenAI chat-completions request",
+        )
+    routed = await chat(ChatRequest(message=_openai_messages_to_conversation(payload.messages)), user)
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": payload.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": routed["answer"]},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": routed["prompt_tokens"],
+            "completion_tokens": routed["completion_tokens"],
+            "total_tokens": routed["prompt_tokens"] + routed["completion_tokens"],
+        },
+    }

@@ -67,6 +67,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 
+CREATE TABLE IF NOT EXISTS service_api_keys (
+    key_hash TEXT PRIMARY KEY,
+    key_prefix TEXT NOT NULL,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_service_api_keys_user_id ON service_api_keys(user_id);
+
 CREATE TABLE IF NOT EXISTS models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
