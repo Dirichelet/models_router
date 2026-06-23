@@ -50,8 +50,23 @@ function renderEvaluation(evaluation) {
   $("#signal-cost-note").textContent = `${evaluation.known_cost_chat_calls || 0} / ${successful} 成功调用可核验`;
 }
 
+function renderPipelineStatus(pipeline) {
+  const pill = $("#pipeline-status");
+  const submit = $("#chat-submit");
+  if (pipeline.ready) {
+    pill.textContent = `已就绪：${pipeline.redactor} → ${pipeline.router} → ${pipeline.active_targets} 个目标`;
+    pill.classList.remove("warning");
+    submit.disabled = false;
+  } else {
+    const missing = [!pipeline.redactor && "脱敏模型", !pipeline.router && "路由模型", !pipeline.active_targets && "目标模型"].filter(Boolean).join("、");
+    pill.textContent = `缺少：${missing}`;
+    pill.classList.add("warning");
+    submit.disabled = true;
+  }
+}
+
 async function loadDashboard() {
-  const [models, rules, calls, stats, evaluation] = await Promise.all([api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation")]);
+  const [models, rules, calls, stats, evaluation, pipeline] = await Promise.all([api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation"), api("/api/pipeline/status")]);
   state.models = models;
   renderModels();
   renderCalls(calls);
@@ -62,6 +77,7 @@ async function loadDashboard() {
   $("#metric-cost").textContent = `$${Number(stats.total_cost || 0).toFixed(6)}`;
   $("#metric-cost-note").textContent = stats.unknown_cost_calls ? `${stats.unknown_cost_calls} 条调用未返回完整 usage` : "";
   renderEvaluation(evaluation);
+  renderPipelineStatus(pipeline);
 }
 
 function renderModels() {

@@ -294,6 +294,23 @@ def _active_pipeline() -> tuple[sqlite3.Row, sqlite3.Row, list[sqlite3.Row]]:
     return redactor, router, targets
 
 
+def _pipeline_status() -> dict[str, Any]:
+    with database.connection() as connection:
+        redactor = connection.execute(
+            "SELECT name FROM models WHERE role = 'redactor' AND is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        router = connection.execute(
+            "SELECT name FROM models WHERE role = 'router' AND is_active = 1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        targets = connection.execute("SELECT COUNT(*) AS count FROM models WHERE role = 'target' AND is_active = 1").fetchone()
+    return {
+        "redactor": redactor["name"] if redactor else None,
+        "router": router["name"] if router else None,
+        "active_targets": int(targets["count"]),
+        "ready": bool(redactor and router and targets["count"]),
+    }
+
+
 async def _invoke(
     model: sqlite3.Row,
     messages: list[dict[str, str]],
@@ -486,6 +503,11 @@ def list_models(_: Annotated[dict[str, Any], Depends(current_user)]) -> list[dic
     with database.connection() as connection:
         rows = connection.execute("SELECT * FROM models ORDER BY role, id").fetchall()
     return [_serialise_model(row) for row in rows]
+
+
+@app.get("/api/pipeline/status")
+def pipeline_status(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]:
+    return _pipeline_status()
 
 
 @app.post("/api/models", status_code=status.HTTP_201_CREATED)

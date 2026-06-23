@@ -64,6 +64,7 @@ textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
 .panel { min-width: 0; padding: 24px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 14px 45px rgba(0,0,0,.14); }
 .panel-heading { justify-content: space-between; gap: 14px; margin-bottom: 20px; }
 .status-pill { border: 1px solid rgba(55,216,158,.35); border-radius: 999px; padding: 6px 10px; color: var(--green); font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.status-pill.warning { border-color: rgba(255, 190, 92, .42); color: #ffc36a; }
 .chat-panel { display: grid; grid-template-rows: auto 1fr auto; min-height: 510px; }
 .chat-output { display: flex; flex-direction: column; gap: 13px; min-height: 270px; max-height: 480px; overflow: auto; padding: 5px 2px 16px; }
 .empty-state { margin: auto 0; padding: 20px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); text-align: center; line-height: 1.6; }

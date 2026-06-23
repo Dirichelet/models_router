@@ -254,3 +254,21 @@ def test_invalid_router_choice_falls_back_and_is_exposed_in_evaluation(monkeypat
         assert response.json()["routing_reason"].startswith("Router response was invalid")
         evaluation = test_client.get("/api/evaluation").json()
         assert evaluation["routing_fallbacks"] == 1
+
+
+def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        assert test_client.get("/api/pipeline/status").json() == {
+            "redactor": None,
+            "router": None,
+            "active_targets": 0,
+            "ready": False,
+        }
+        for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
+            assert test_client.post("/api/models", headers=headers, json=model_payload(name, role)).status_code == 201
+        status = test_client.get("/api/pipeline/status").json()
+        assert status["ready"] is True
+        assert status["redactor"] == "redactor"
+        assert status["router"] == "router"
+        assert status["active_targets"] == 1
