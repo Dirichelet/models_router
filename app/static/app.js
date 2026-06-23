@@ -211,6 +211,8 @@ async function refreshCalls() {
 async function initialise() {
   try {
     const user = await api("/api/auth/me");
+    const csrf = await api("/api/auth/csrf");
+    state.csrfToken = csrf.csrf_token;
     showApp(user);
     await loadDashboard();
   } catch (_) {

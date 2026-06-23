@@ -498,6 +498,30 @@ def me(user: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]
     return {"id": user["id"], "username": user["username"]}
 
 
+@app.get("/api/auth/csrf")
+def refresh_csrf_token(
+    request: Request,
+    user: Annotated[dict[str, Any], Depends(current_user)],
+) -> dict[str, str]:
+    """Issue a fresh in-memory CSRF token after a browser page reload.
+
+    The session cookie is HttpOnly, so JavaScript cannot recover the prior token.
+    Rotating it server-side keeps the token unavailable to scripts outside this origin.
+    """
+    raw_session_token = request.cookies.get(SESSION_COOKIE)
+    if not raw_session_token:
+        raise _unauthorized()
+    csrf_token = new_token()
+    with database.connection() as connection:
+        updated = connection.execute(
+            "UPDATE sessions SET csrf_hash = ? WHERE token_hash = ? AND user_id = ?",
+            (token_hash(csrf_token), token_hash(raw_session_token), user["id"]),
+        ).rowcount
+    if updated != 1:
+        raise _unauthorized()
+    return {"csrf_token": csrf_token}
+
+
 @app.put("/api/auth/password")
 def change_password(
     change: PasswordChange,

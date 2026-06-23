@@ -55,6 +55,17 @@ def test_model_changes_require_csrf() -> None:
         assert response.status_code == 403
 
 
+def test_csrf_token_is_refreshed_after_a_page_reload() -> None:
+    with client() as test_client:
+        stale_headers = bootstrap(test_client)
+        refreshed = test_client.get("/api/auth/csrf")
+        assert refreshed.status_code == 200
+        fresh_headers = {"X-CSRF-Token": refreshed.json()["csrf_token"]}
+        assert fresh_headers["X-CSRF-Token"] != stale_headers["X-CSRF-Token"]
+        assert test_client.post("/api/models", headers=stale_headers, json=model_payload("stale", "redactor")).status_code == 403
+        assert test_client.post("/api/models", headers=fresh_headers, json=model_payload("fresh", "redactor")).status_code == 201
+
+
 def test_chat_redacts_before_target_and_records_only_redacted_content(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
