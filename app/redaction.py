@@ -115,11 +115,14 @@ def _apply_model_spans(text: str, predictions: list[dict[str, Any]], min_score: 
     spans: list[tuple[int, int, str]] = []
     for prediction in predictions:
         placeholder = _placeholder_for_label(prediction.get("entity_group") or prediction.get("entity"))
-        score = prediction.get("score")
+        raw_score = prediction.get("score")
         start, end = prediction.get("start"), prediction.get("end")
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            continue
         if (
             not placeholder
-            or not isinstance(score, (int, float))
             or score < min_score
             or not isinstance(start, int)
             or not isinstance(end, int)
@@ -132,10 +135,18 @@ def _apply_model_spans(text: str, predictions: list[dict[str, Any]], min_score: 
     if not spans:
         return text, 0
     spans.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    merged_spans: list[tuple[int, int, str]] = []
+    for start, end, placeholder in spans:
+        if merged_spans:
+            previous_start, previous_end, previous_placeholder = merged_spans[-1]
+            if placeholder == previous_placeholder and start >= previous_end and (start == previous_end or text[previous_end:start].isspace()):
+                merged_spans[-1] = (previous_start, end, previous_placeholder)
+                continue
+        merged_spans.append((start, end, placeholder))
     output: list[str] = []
     cursor = 0
     accepted = 0
-    for start, end, placeholder in spans:
+    for start, end, placeholder in merged_spans:
         if start < cursor:
             continue
         output.extend((text[cursor:start], placeholder))

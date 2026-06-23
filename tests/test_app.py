@@ -25,7 +25,7 @@ from app.provider import Completion, Usage  # noqa: E402
 from app.provider import ProviderError, chat_completion  # noqa: E402
 from app.database import DEFAULT_RULES  # noqa: E402
 from app.config import Settings  # noqa: E402
-from app.redaction import KeywordRule, RedactionResult, _replace_keywords, _replace_regex  # noqa: E402
+from app.redaction import KeywordRule, RedactionResult, _apply_model_spans, _replace_keywords, _replace_regex  # noqa: E402
 from app.security import SecretBox  # noqa: E402
 
 
@@ -369,6 +369,31 @@ def test_local_regex_and_fuzzy_keyword_rules_mask_chinese_sensitive_text() -> No
     )
     assert keyword_count == 1
     assert keyword_redacted == "[PROJECT] 正在上线"
+
+
+def test_model_spans_accept_transformers_numeric_scores() -> None:
+    class TensorLikeScore:
+        def __float__(self) -> float:
+            return 0.99
+
+    redacted, count = _apply_model_spans(
+        "My name is Alice.",
+        [{"entity_group": "private_person", "score": TensorLikeScore(), "start": 11, "end": 16}],
+        0.5,
+    )
+    assert count == 1
+    assert redacted == "My name is [PERSON]."
+
+    merged, merged_count = _apply_model_spans(
+        "My name is Alice Smith.",
+        [
+            {"entity_group": "private_person", "score": 0.99, "start": 11, "end": 16},
+            {"entity_group": "private_person", "score": 0.99, "start": 16, "end": 22},
+        ],
+        0.5,
+    )
+    assert merged_count == 1
+    assert merged == "My name is [PERSON]."
 
 
 def test_local_redactor_uses_only_a_validated_local_path_without_duplicate_local_files_flag(monkeypatch, tmp_path) -> None:
