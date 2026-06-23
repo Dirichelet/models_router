@@ -59,7 +59,7 @@ def test_chat_redacts_before_target_and_records_only_redacted_content(monkeypatc
         if len(calls) == 1:
             return Completion("Customer [PERSON] asked about account [ACCOUNT_ID].", Usage(10, 5))
         if len(calls) == 2:
-            return Completion('{"model_id": 3, "reason": "Low-cost model is sufficient."}', Usage(20, 10))
+            return Completion('{"model_id": "3", "reason": "Low-cost model is sufficient."}', Usage(20, 10))
         return Completion("Here is the safe answer.", Usage(30, 15))
 
     monkeypatch.setattr(application, "chat_completion", fake_completion)
@@ -85,3 +85,30 @@ def test_chat_redacts_before_target_and_records_only_redacted_content(monkeypatc
         assert audit[0]["redacted_message"] == payload["redacted_message"]
         assert original_message not in str(audit)
         assert audit[0]["total_cost"] == 0.00012
+
+
+def test_privacy_guard_stops_a_leaky_redactor_before_routing_or_target(monkeypatch) -> None:
+    invoked = 0
+
+    async def leaky_redactor(**_kwargs):
+        nonlocal invoked
+        invoked += 1
+        return Completion("Contact alice@example.com for the answer.", Usage(10, 5))
+
+    monkeypatch.setattr(application, "chat_completion", leaky_redactor)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        assert test_client.post("/api/models", headers=headers, json=model_payload("redactor", "redactor")).status_code == 201
+        assert test_client.post("/api/models", headers=headers, json=model_payload("router", "router")).status_code == 201
+        assert test_client.post("/api/models", headers=headers, json=model_payload("target", "target")).status_code == 201
+
+        original_message = "Please contact alice@example.com about my case."
+        response = test_client.post("/api/chat", headers=headers, json={"message": original_message})
+        assert response.status_code == 502
+        assert "de-identification check" in response.json()["detail"]
+        assert invoked == 1
+
+        audit = test_client.get("/api/calls").json()
+        assert audit[0]["status"] == "failed"
+        assert audit[0]["redacted_message"] is None
+        assert original_message not in str(audit)

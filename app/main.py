@@ -35,6 +35,17 @@ database = Database(settings.database_path)
 secret_box = SecretBox(settings.fernet_key)
 SESSION_COOKIE = "models_router_session"
 STATIC_DIR = Path(__file__).parent / "static"
+SENSITIVE_VALUE_PATTERNS = (
+    re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+"),
+    re.compile(r"(?<!\d)(?:\+?86[-\s]?)?1[3-9]\d{9}(?!\d)"),
+    re.compile(r"(?<!\d)\d{15,19}(?:[Xx])?(?!\d)"),
+    re.compile(r"(?<!\d)\d{6,14}(?!\d)"),
+    re.compile(r"\b(?:sk|rk|pk|api)[_-][A-Za-z0-9_-]{16,}\b", re.IGNORECASE),
+)
+
+
+class PrivacyVerificationError(ValueError):
+    """Raised before a redaction failure can be sent to routing or target providers."""
 
 
 def utc_now() -> datetime:
@@ -268,6 +279,22 @@ def _cost(model: sqlite3.Row, usage: Usage) -> float:
     )
 
 
+def _leaked_sensitive_values(original: str, redacted: str) -> list[str]:
+    """Find high-confidence raw values that a redactor failed to remove.
+
+    This is a fail-closed guard, not a replacement for the configurable redaction model.
+    It deliberately only checks formats with a low false-positive risk.
+    """
+    redacted_normalized = redacted.casefold()
+    leaked: list[str] = []
+    for pattern in SENSITIVE_VALUE_PATTERNS:
+        for match in pattern.finditer(original):
+            value = match.group(0)
+            if value.casefold() in redacted_normalized and value not in leaked:
+                leaked.append(value)
+    return leaked
+
+
 def _choose_target(router_answer: str, targets: list[sqlite3.Row]) -> tuple[sqlite3.Row, str]:
     by_id = {target["id"]: target for target in targets}
     by_name = {target["name"]: target for target in targets}
@@ -280,7 +307,10 @@ def _choose_target(router_answer: str, targets: list[sqlite3.Row]) -> tuple[sqli
                 candidate = decoded
         except json.JSONDecodeError:
             pass
-    selected = by_id.get(candidate.get("model_id"))
+    raw_model_id = candidate.get("model_id")
+    if isinstance(raw_model_id, str) and raw_model_id.isdecimal():
+        raw_model_id = int(raw_model_id)
+    selected = by_id.get(raw_model_id)
     if selected is None and isinstance(candidate.get("model_name"), str):
         selected = by_name.get(candidate["model_name"])
     if selected is None:
@@ -538,6 +568,7 @@ async def chat(
     redactor, router, targets = _active_pipeline()
     rules = _rules()
     redacted: str | None = None
+    redaction_verified = False
     selected: sqlite3.Row | None = None
     routing_reason: str | None = None
     prompt_tokens = 0
@@ -557,6 +588,12 @@ async def chat(
         prompt_tokens += redaction.usage.prompt_tokens
         completion_tokens += redaction.usage.completion_tokens
         total_cost += _cost(redactor, redaction.usage)
+        leaked_values = _leaked_sensitive_values(message, redacted)
+        if leaked_values:
+            raise PrivacyVerificationError(
+                "Automated de-identification check blocked sensitive content before routing or target inference"
+            )
+        redaction_verified = True
 
         candidates = [
             {
@@ -617,7 +654,8 @@ async def chat(
         safe_error = str(exc)[:300]
         _record_call(
             user_id=user["id"], redactor_name=redactor["name"], router_name=router["name"],
-            target_name=selected["name"] if selected else None, redacted_message=redacted,
+            target_name=selected["name"] if selected else None,
+            redacted_message=redacted if redaction_verified else None,
             routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             total_cost=round(total_cost, 8), status_name="failed", error_message=safe_error,
         )
@@ -626,7 +664,8 @@ async def chat(
         logger.exception("Unexpected chat pipeline failure")
         _record_call(
             user_id=user["id"], redactor_name=redactor["name"], router_name=router["name"],
-            target_name=selected["name"] if selected else None, redacted_message=redacted,
+            target_name=selected["name"] if selected else None,
+            redacted_message=redacted if redaction_verified else None,
             routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             total_cost=round(total_cost, 8), status_name="failed", error_message="Unexpected pipeline failure",
         )
