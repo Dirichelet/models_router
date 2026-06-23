@@ -219,3 +219,13 @@ def test_audit_records_can_be_deleted_from_the_protected_api(monkeypatch) -> Non
         assert cleared.status_code == 200
         assert cleared.json() == {"deleted_count": 1}
         assert test_client.get("/api/calls").json() == []
+
+
+def test_short_weak_password_is_rejected_but_long_passphrase_is_accepted() -> None:
+    with client() as test_client:
+        weak = test_client.post("/api/auth/bootstrap", json={"username": "admin", "password": "onlylowercase"})
+        assert weak.status_code == 422
+        strong = test_client.post(
+            "/api/auth/bootstrap", json={"username": "admin", "password": "correct horse battery staple"}
+        )
+        assert strong.status_code == 201

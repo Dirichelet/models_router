@@ -148,7 +148,7 @@ async function initialise() {
     await loadDashboard();
   } catch (_) {
     const auth = await api("/api/auth/state");
-    $("#auth-copy").textContent = auth.bootstrap_required ? "创建唯一的初始管理员账户。密码至少 12 位。" : "使用管理员账户登录。";
+    $("#auth-copy").textContent = auth.bootstrap_required ? "创建唯一的初始管理员账户。12–15 位密码需使用至少三类字符；16 位以上可使用长密码短语。" : "使用管理员账户登录。";
     $("#bootstrap-token-field").hidden = !auth.bootstrap_required || !auth.bootstrap_token_required;
     $("#bootstrap-token").required = Boolean(auth.bootstrap_required && auth.bootstrap_token_required);
     $("#auth-submit").textContent = auth.bootstrap_required ? "创建账户并进入控制台" : "登录";

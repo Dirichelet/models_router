@@ -102,6 +102,23 @@ class Credentials(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=12, max_length=256)
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        if len(set(value)) < 4:
+            raise ValueError("Password must not be a repeated-character password")
+        character_classes = sum(
+            (
+                any(char.islower() for char in value),
+                any(char.isupper() for char in value),
+                any(char.isdigit() for char in value),
+                any(not char.isalnum() for char in value),
+            )
+        )
+        if len(value) < 16 and character_classes < 3:
+            raise ValueError("Passwords shorter than 16 characters must use at least three character classes")
+        return value
+
 
 class BootstrapCredentials(Credentials):
     bootstrap_token: str = Field(default="", max_length=512)
@@ -110,6 +127,11 @@ class BootstrapCredentials(Credentials):
 class PasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=12, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password_strength(cls, value: str) -> str:
+        return Credentials.validate_password_strength(value)
 
 
 class ModelCreate(BaseModel):

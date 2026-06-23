@@ -160,7 +160,7 @@
           <form id="password-form" class="stacked-form">
             <div class="panel-heading"><h2 id="password-title">修改密码</h2><button id="close-password-dialog" class="ghost" type="button">关闭</button></div>
             <label>当前密码<input id="current-password" type="password" minlength="1" maxlength="256" required autocomplete="current-password"></label>
-            <label>新密码<input id="new-password" type="password" minlength="12" maxlength="256" required autocomplete="new-password"></label>
+            <label>新密码<input id="new-password" type="password" minlength="12" maxlength="256" required autocomplete="new-password"><span class="field-hint">12–15 位需含至少三类字符；16 位以上可使用长密码短语。</span></label>
             <p id="password-message" class="form-message" role="status"></p>
             <button class="primary" type="submit">更新密码并使旧会话失效</button>
           </form>

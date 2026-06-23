@@ -33,6 +33,7 @@ h2 { font-size: 1.15rem; }
 
 .stacked-form, .model-form { display: grid; gap: 15px; }
 label { display: grid; gap: 7px; color: var(--muted); font-size: .82rem; font-weight: 650; }
+.field-hint { color: var(--muted); font-size: .7rem; font-weight: 500; line-height: 1.4; }
 input, textarea, select { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: #0b1a2d; outline: none; }
 input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(69, 168, 255, .14); }
 textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
