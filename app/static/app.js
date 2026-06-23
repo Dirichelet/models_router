@@ -1,4 +1,4 @@
-const state = { csrfToken: null, models: [] };
+const state = { csrfToken: null, models: [], providerModels: [] };
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char]);
@@ -7,6 +7,11 @@ function setMessage(message, kind = "error") {
   const target = $("#app-message");
   target.textContent = message;
   target.className = `app-message ${kind === "success" ? "success" : ""}`;
+}
+
+function showView(name) {
+  document.querySelectorAll(".app-view").forEach((view) => { view.hidden = view.dataset.view !== name; });
+  document.querySelectorAll(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.viewTarget === name));
 }
 
 async function api(path, options = {}) {
@@ -33,11 +38,10 @@ function showApp(user) {
   $("#auth-panel").hidden = true;
   $("#app-shell").hidden = false;
   $("#current-user").textContent = user.username;
+  showView("chat");
 }
 
-function percentage(part, total) {
-  return total ? `${Math.round((part / total) * 100)}%` : "—";
-}
+function percentage(part, total) { return total ? `${Math.round((part / total) * 100)}%` : "—"; }
 
 function renderEvaluation(evaluation) {
   const successful = evaluation.successful_chat_calls || 0;
@@ -66,7 +70,9 @@ function renderPipelineStatus(pipeline) {
 }
 
 async function loadDashboard() {
-  const [models, rules, calls, stats, evaluation, pipeline] = await Promise.all([api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation"), api("/api/pipeline/status")]);
+  const [models, rules, calls, stats, evaluation, pipeline] = await Promise.all([
+    api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation"), api("/api/pipeline/status"),
+  ]);
   state.models = models;
   renderModels();
   renderCalls(calls);
@@ -87,11 +93,9 @@ function renderModels() {
     return;
   }
   container.innerHTML = state.models.map((model) => `
-    <div class="model-row">
-      <div><h3>${escapeHtml(model.name)} ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"}</h3>
-      <p>${escapeHtml(model.role)} · ${escapeHtml(model.model_name)} · $${Number(model.input_price_per_million).toFixed(4)}/$${Number(model.output_price_per_million).toFixed(4)} 每百万 token</p></div>
-      <div class="model-actions"><button class="ghost test-model" data-id="${model.id}" type="button">测试</button><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button><button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div>
-    </div>`).join("");
+    <div class="model-row"><div><h3>${escapeHtml(model.name)} ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"}</h3>
+    <p>${escapeHtml(model.role)} · ${escapeHtml(model.model_name)} · $${Number(model.input_price_per_million).toFixed(4)}/$${Number(model.output_price_per_million).toFixed(4)} 每百万 token</p></div>
+    <div class="model-actions"><button class="ghost test-model" data-id="${model.id}" type="button">测试</button><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button><button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div></div>`).join("");
 }
 
 function renderCalls(calls) {
@@ -104,6 +108,28 @@ function renderCalls(calls) {
     <td class="status-${escapeHtml(call.status)}">${escapeHtml(call.status)}</td></tr>`).join("");
 }
 
+function fuzzyMatch(value, query) {
+  const text = value.toLocaleLowerCase();
+  const search = query.trim().toLocaleLowerCase();
+  if (!search || text.includes(search)) return true;
+  let position = 0;
+  return [...search].every((character) => {
+    position = text.indexOf(character, position);
+    if (position < 0) return false;
+    position += 1;
+    return true;
+  });
+}
+
+function renderProviderModels() {
+  const query = $("#model-fuzzy-search").value;
+  const options = state.providerModels.filter((model) => fuzzyMatch(model, query)).slice(0, 80);
+  const target = $("#provider-model-options");
+  if (!state.providerModels.length) { target.innerHTML = ""; return; }
+  if (!options.length) { target.innerHTML = '<p class="field-hint">没有匹配的模型，可继续手动输入 model ID。</p>'; return; }
+  target.innerHTML = options.map((model) => `<button class="provider-model-option" type="button" data-model="${escapeHtml(model)}">${escapeHtml(model)}</button>`).join("");
+}
+
 function resetModelForm() {
   $("#model-form").reset();
   $("#model-id").value = "";
@@ -111,11 +137,16 @@ function resetModelForm() {
   $("#model-input-price").value = "0";
   $("#model-output-price").value = "0";
   $("#model-submit").textContent = "保存模型";
+  state.providerModels = [];
+  $("#model-fuzzy-search").value = "";
+  $("#provider-model-options").innerHTML = "";
+  $("#provider-model-status").textContent = "尚未加载模型列表。";
 }
 
 function editModel(id) {
   const model = state.models.find((item) => item.id === id);
   if (!model) return;
+  showView("models");
   $("#model-id").value = model.id;
   $("#model-name").value = model.name;
   $("#model-role").value = model.role;
@@ -126,7 +157,27 @@ function editModel(id) {
   $("#model-output-price").value = model.output_price_per_million;
   $("#model-active").checked = model.is_active;
   $("#model-submit").textContent = "更新模型";
-  $("#model-form").scrollIntoView({ behavior: "smooth", block: "center" });
+  $("#model-form").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function fetchProviderModels() {
+  const button = $("#fetch-provider-models");
+  const status = $("#provider-model-status");
+  const baseUrl = $("#model-base-url").value.trim();
+  const apiKey = $("#model-api-key").value;
+  const modelId = Number($("#model-id").value);
+  if (!baseUrl) { status.textContent = "请先填写以 /v1 结尾的 Base URL。"; return; }
+  if (!apiKey && !modelId) { status.textContent = "新模型需要先填写 API Key 才能获取列表。"; return; }
+  button.disabled = true;
+  status.textContent = "正在读取 Provider 模型列表…";
+  try {
+    const result = modelId && !apiKey
+      ? await api(`/api/models/${modelId}/available-models`, { method: "POST" })
+      : await api("/api/provider-models", { method: "POST", body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }) });
+    state.providerModels = result.models;
+    status.textContent = `已加载 ${result.models.length} 个模型；可搜索并点击选择。`;
+    renderProviderModels();
+  } catch (error) { status.textContent = error.message; state.providerModels = []; renderProviderModels(); } finally { button.disabled = false; }
 }
 
 function appendChat(kind, content) {
@@ -173,106 +224,61 @@ async function initialise() {
   }
 }
 
+$(".app-nav").addEventListener("click", (event) => { if (event.target.dataset.viewTarget) showView(event.target.dataset.viewTarget); });
 $("#auth-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const button = $("#auth-submit"); button.disabled = true;
-  $("#auth-message").textContent = "";
+  event.preventDefault(); const button = $("#auth-submit"); button.disabled = true; $("#auth-message").textContent = "";
   try {
     const isBootstrap = event.currentTarget.dataset.mode === "bootstrap";
     const request = { username: $("#auth-username").value.trim(), password: $("#auth-password").value };
     if (isBootstrap) request.bootstrap_token = $("#bootstrap-token").value;
-    const body = JSON.stringify(request);
-    const route = isBootstrap ? "/api/auth/bootstrap" : "/api/auth/login";
-    const result = await api(route, { method: "POST", body });
-    state.csrfToken = result.csrf_token;
-    showApp(result);
-    await loadDashboard();
+    const result = await api(isBootstrap ? "/api/auth/bootstrap" : "/api/auth/login", { method: "POST", body: JSON.stringify(request) });
+    state.csrfToken = result.csrf_token; showApp(result); await loadDashboard();
   } catch (error) { $("#auth-message").textContent = error.message; } finally { button.disabled = false; }
 });
 
-$("#logout-button").addEventListener("click", async () => {
-  try { await api("/api/auth/logout", { method: "POST" }); } finally { showAuth(); await initialise(); }
-});
-
-$("#change-password-button").addEventListener("click", () => {
-  $("#password-form").reset();
-  $("#password-message").textContent = "";
-  $("#password-dialog").showModal();
-});
+$("#logout-button").addEventListener("click", async () => { try { await api("/api/auth/logout", { method: "POST" }); } finally { showAuth(); await initialise(); } });
+$("#change-password-button").addEventListener("click", () => { $("#password-form").reset(); $("#password-message").textContent = ""; $("#password-dialog").showModal(); });
 $("#close-password-dialog").addEventListener("click", () => $("#password-dialog").close());
 $("#password-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const message = $("#password-message");
-  message.textContent = "";
-  try {
-    const result = await api("/api/auth/password", { method: "PUT", body: JSON.stringify({ current_password: $("#current-password").value, new_password: $("#new-password").value }) });
-    state.csrfToken = result.csrf_token;
-    $("#password-dialog").close();
-    setMessage("密码已更新，其他登录会话已失效。", "success");
-  } catch (error) { message.textContent = error.message; }
+  event.preventDefault(); const message = $("#password-message"); message.textContent = "";
+  try { const result = await api("/api/auth/password", { method: "PUT", body: JSON.stringify({ current_password: $("#current-password").value, new_password: $("#new-password").value }) }); state.csrfToken = result.csrf_token; $("#password-dialog").close(); setMessage("密码已更新，其他登录会话已失效。", "success"); } catch (error) { message.textContent = error.message; }
 });
 
 $("#model-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const id = Number($("#model-id").value);
-  const data = {
-    name: $("#model-name").value.trim(), role: $("#model-role").value, base_url: $("#model-base-url").value.trim(),
-    api_key: $("#model-api-key").value, model_name: $("#model-provider-name").value.trim(),
-    input_price_per_million: Number($("#model-input-price").value), output_price_per_million: Number($("#model-output-price").value),
-    is_active: $("#model-active").checked,
-  };
+  event.preventDefault(); const id = Number($("#model-id").value);
+  const data = { name: $("#model-name").value.trim(), role: $("#model-role").value, base_url: $("#model-base-url").value.trim(), api_key: $("#model-api-key").value, model_name: $("#model-provider-name").value.trim(), input_price_per_million: Number($("#model-input-price").value), output_price_per_million: Number($("#model-output-price").value), is_active: $("#model-active").checked };
   if (id && !data.api_key) delete data.api_key;
-  try {
-    await api(id ? `/api/models/${id}` : "/api/models", { method: id ? "PUT" : "POST", body: JSON.stringify(data) });
-    setMessage("模型配置已保存。", "success"); resetModelForm(); await loadDashboard();
-  } catch (error) { setMessage(error.message); }
+  try { await api(id ? `/api/models/${id}` : "/api/models", { method: id ? "PUT" : "POST", body: JSON.stringify(data) }); setMessage("模型配置已保存。", "success"); resetModelForm(); await loadDashboard(); } catch (error) { setMessage(error.message); }
 });
 
+$("#fetch-provider-models").addEventListener("click", fetchProviderModels);
+$("#model-fuzzy-search").addEventListener("input", renderProviderModels);
+$("#provider-model-options").addEventListener("click", (event) => {
+  const model = event.target.dataset.model;
+  if (!model) return;
+  $("#model-provider-name").value = model;
+  $("#provider-model-status").textContent = `已选择 ${model}。`;
+});
 $("#models-list").addEventListener("click", async (event) => {
-  const id = Number(event.target.dataset.id);
-  if (!id) return;
+  const id = Number(event.target.dataset.id); if (!id) return;
   if (event.target.classList.contains("edit-model")) editModel(id);
   if (event.target.classList.contains("test-model")) {
     event.target.disabled = true;
-    try {
-      const result = await api(`/api/models/${id}/test`, { method: "POST" });
-      const cost = result.cost_known ? `$${Number(result.total_cost).toFixed(6)}` : "usage 未完整返回";
-      setMessage(`${result.model_name} 连接成功：${result.response_preview}（${cost}）`, "success");
-      await refreshCalls();
-    } catch (error) { setMessage(error.message); } finally { event.target.disabled = false; }
+    try { const result = await api(`/api/models/${id}/test`, { method: "POST" }); const cost = result.cost_known ? `$${Number(result.total_cost).toFixed(6)}` : "usage 未完整返回"; setMessage(`${result.model_name} 连接成功：${result.response_preview}（${cost}）`, "success"); await refreshCalls(); } catch (error) { setMessage(error.message); } finally { event.target.disabled = false; }
   }
-  if (event.target.classList.contains("delete-model") && confirm("删除此模型配置？调用历史不会删除。")) {
-    try { await api(`/api/models/${id}`, { method: "DELETE" }); resetModelForm(); await loadDashboard(); setMessage("模型配置已删除。", "success"); } catch (error) { setMessage(error.message); }
-  }
+  if (event.target.classList.contains("delete-model") && confirm("删除此模型配置？调用历史不会删除。")) { try { await api(`/api/models/${id}`, { method: "DELETE" }); resetModelForm(); await loadDashboard(); setMessage("模型配置已删除。", "success"); } catch (error) { setMessage(error.message); } }
 });
-
 $("#reset-model-form").addEventListener("click", resetModelForm);
-$("#rules-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try {
-    await api("/api/rules", { method: "PUT", body: JSON.stringify({ redaction: $("#redaction-rule").value, routing: $("#routing-rule").value }) });
-    setMessage("规则已保存。", "success");
-  } catch (error) { setMessage(error.message); }
+$("#restore-default-rules").addEventListener("click", async () => {
+  if (!confirm("将用推荐规则覆盖当前编辑框内容；需点击“保存规则”才会生效。")) return;
+  try { const defaults = await api("/api/rules/defaults"); $("#redaction-rule").value = defaults.redaction; $("#routing-rule").value = defaults.routing; setMessage("已填入推荐规则，请检查后保存。", "success"); } catch (error) { setMessage(error.message); }
 });
-
+$("#rules-form").addEventListener("submit", async (event) => { event.preventDefault(); try { await api("/api/rules", { method: "PUT", body: JSON.stringify({ redaction: $("#redaction-rule").value, routing: $("#routing-rule").value }) }); setMessage("规则已保存。", "success"); } catch (error) { setMessage(error.message); } });
 $("#chat-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const input = $("#chat-message"), button = $("#chat-submit"), message = input.value.trim();
-  if (!message) return;
+  event.preventDefault(); const input = $("#chat-message"), button = $("#chat-submit"), message = input.value.trim(); if (!message) return;
   appendChat("user", message); input.value = ""; button.disabled = true;
-  try {
-    const result = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
-    appendPipeline(result); appendChat("assistant", result.answer); await refreshCalls();
-  } catch (error) { appendChat("assistant", `调用失败：${error.message}`); await refreshCalls(); } finally { button.disabled = false; }
+  try { const result = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) }); appendPipeline(result); appendChat("assistant", result.answer); await refreshCalls(); } catch (error) { appendChat("assistant", `调用失败：${error.message}`); await refreshCalls(); } finally { button.disabled = false; }
 });
-
 $("#refresh-calls").addEventListener("click", () => refreshCalls().catch((error) => setMessage(error.message)));
-$("#clear-calls").addEventListener("click", async () => {
-  if (!confirm("永久清除全部调用记录与已记录的消费？此操作不可撤销。")) return;
-  try {
-    const result = await api("/api/calls", { method: "DELETE" });
-    await refreshCalls();
-    setMessage(`已清除 ${result.deleted_count} 条调用记录。`, "success");
-  } catch (error) { setMessage(error.message); }
-});
+$("#clear-calls").addEventListener("click", async () => { if (!confirm("永久清除全部调用记录与已记录的消费？此操作不可撤销。")) return; try { const result = await api("/api/calls", { method: "DELETE" }); await refreshCalls(); setMessage(`已清除 ${result.deleted_count} 条调用记录。`, "success"); } catch (error) { setMessage(error.message); } });
 initialise().catch((error) => { $("#auth-copy").textContent = `无法启动：${error.message}`; });

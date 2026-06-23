@@ -15,18 +15,9 @@
         <h1 id="auth-title">Models Router</h1>
         <p id="auth-copy" class="muted">正在检查账户状态…</p>
         <form id="auth-form" class="stacked-form" autocomplete="on">
-          <label>
-            用户名
-            <input id="auth-username" name="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" required autocomplete="username">
-          </label>
-          <label>
-            密码
-            <input id="auth-password" name="password" type="password" minlength="12" maxlength="256" required autocomplete="current-password">
-          </label>
-          <label id="bootstrap-token-field" hidden>
-            启动令牌
-            <input id="bootstrap-token" name="bootstrap-token" type="password" maxlength="512" autocomplete="off">
-          </label>
+          <label>用户名<input id="auth-username" name="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" required autocomplete="username"></label>
+          <label>密码<input id="auth-password" name="password" type="password" minlength="12" maxlength="256" required autocomplete="current-password"></label>
+          <label id="bootstrap-token-field" hidden>启动令牌<input id="bootstrap-token" name="bootstrap-token" type="password" maxlength="512" autocomplete="off"></label>
           <button id="auth-submit" class="primary" type="submit">登录</button>
         </form>
         <p id="auth-message" class="form-message" role="status"></p>
@@ -34,105 +25,48 @@
 
       <section id="app-shell" class="app-shell" hidden>
         <header class="topbar">
-          <div class="brand-row">
-            <div class="brand-mark small">MR</div>
-            <div>
-              <p class="eyebrow">SECURE MODEL OPERATIONS</p>
-              <h1>Models Router</h1>
-            </div>
-          </div>
-          <div class="account-row">
-            <span id="current-user" class="muted"></span>
-            <button id="change-password-button" class="ghost" type="button">修改密码</button>
-            <button id="logout-button" class="ghost" type="button">退出登录</button>
-          </div>
+          <div class="brand-row"><div class="brand-mark small">MR</div><div><p class="eyebrow">SECURE MODEL OPERATIONS</p><h1>Models Router</h1></div></div>
+          <div class="account-row"><span id="current-user" class="muted"></span><button id="change-password-button" class="ghost" type="button">修改密码</button><button id="logout-button" class="ghost" type="button">退出登录</button></div>
         </header>
+
+        <nav class="app-nav" aria-label="功能导航">
+          <button class="nav-item active" data-view-target="chat" type="button">聊天</button>
+          <button class="nav-item" data-view-target="models" type="button">模型配置</button>
+          <button class="nav-item" data-view-target="rules" type="button">提示词规则</button>
+          <button class="nav-item" data-view-target="audit" type="button">调用审计</button>
+          <button class="nav-item" data-view-target="evaluation" type="button">质量评估</button>
+        </nav>
 
         <div id="app-message" class="app-message" role="status"></div>
 
-        <section class="metrics" aria-label="调用指标">
-          <article class="metric-card">
-            <span>总调用</span>
-            <strong id="metric-calls">0</strong>
-          </article>
-          <article class="metric-card">
-            <span>成功调用</span>
-            <strong id="metric-success">0</strong>
-          </article>
-          <article class="metric-card accent">
-            <span>已确认消费</span>
-            <strong id="metric-cost">$0.000000</strong>
-            <small id="metric-cost-note" class="muted"></small>
-          </article>
-        </section>
-
-        <section class="quality-signals" aria-label="运行质量信号">
-          <div class="signals-heading"><p class="eyebrow">EVALUATION SIGNALS</p><span>运行指标，用于迭代规则与模型配置</span></div>
-          <article class="signal-card"><span>脱敏拦截</span><strong id="signal-privacy">0</strong><small id="signal-privacy-note" class="muted">暂无聊天调用</small></article>
-          <article class="signal-card"><span>路由结构合规</span><strong id="signal-routing">—</strong><small id="signal-routing-note" class="muted">暂无成功调用</small></article>
-          <article class="signal-card"><span>成本可核验</span><strong id="signal-cost">—</strong><small id="signal-cost-note" class="muted">暂无成功调用</small></article>
-        </section>
-
-        <section class="workspace-grid">
+        <section class="app-view" data-view="chat">
+          <section class="metrics" aria-label="调用指标">
+            <article class="metric-card"><span>总调用</span><strong id="metric-calls">0</strong></article>
+            <article class="metric-card"><span>成功调用</span><strong id="metric-success">0</strong></article>
+            <article class="metric-card accent"><span>已确认消费</span><strong id="metric-cost">$0.000000</strong><small id="metric-cost-note" class="muted"></small></article>
+          </section>
           <article class="panel chat-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">PRIVATE CHAT</p>
-                <h2>发送消息</h2>
-              </div>
-              <span id="pipeline-status" class="status-pill">检查配置中…</span>
-            </div>
-            <div id="chat-output" class="chat-output" aria-live="polite">
-              <div class="empty-state">配置脱敏模型、路由模型和至少一个目标模型后，即可开始聊天。</div>
-            </div>
-            <form id="chat-form" class="chat-form">
-              <label class="sr-only" for="chat-message">消息</label>
-              <textarea id="chat-message" name="message" maxlength="20000" placeholder="在此输入消息；原始消息不会写入调用记录。" required></textarea>
-              <button id="chat-submit" class="primary" type="submit">脱敏并发送</button>
-            </form>
-          </article>
-
-          <article class="panel audit-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">AUDIT TRAIL</p>
-                <h2>最近调用</h2>
-              </div>
-              <div class="model-actions"><button id="refresh-calls" class="ghost" type="button">刷新</button><button id="clear-calls" class="ghost danger" type="button">清除记录</button></div>
-            </div>
-            <div class="audit-scroll">
-              <table>
-                <thead>
-                  <tr><th>时间</th><th>类型</th><th>目标模型</th><th>脱敏内容</th><th>消费</th><th>状态</th></tr>
-                </thead>
-                <tbody id="calls-table"></tbody>
-              </table>
-            </div>
+            <div class="panel-heading"><div><p class="eyebrow">PRIVATE CHAT</p><h2>发送消息</h2></div><span id="pipeline-status" class="status-pill">检查配置中…</span></div>
+            <div id="chat-output" class="chat-output" aria-live="polite"><div class="empty-state">在“模型配置”中配置脱敏模型、路由模型和至少一个目标模型后，即可开始聊天。</div></div>
+            <form id="chat-form" class="chat-form"><label class="sr-only" for="chat-message">消息</label><textarea id="chat-message" name="message" maxlength="20000" placeholder="在此输入消息；原始消息不会写入调用记录。" required></textarea><button id="chat-submit" class="primary" type="submit">脱敏并发送</button></form>
           </article>
         </section>
 
-        <section class="configuration-grid">
+        <section class="app-view" data-view="models" hidden>
           <article class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">PROVIDERS</p>
-                <h2>模型配置</h2>
-              </div>
-              <button id="reset-model-form" class="ghost" type="button">新建配置</button>
-            </div>
+            <div class="panel-heading"><div><p class="eyebrow">OPENAI-COMPATIBLE PROVIDERS</p><h2>模型配置</h2><p class="panel-copy">Base URL 必须以 <code>/v1</code> 结尾。输入地址和 API Key 后可读取 Provider 模型列表并模糊搜索选择。</p></div><button id="reset-model-form" class="ghost" type="button">新建配置</button></div>
             <form id="model-form" class="model-form">
               <input id="model-id" type="hidden">
-              <label>显示名称<input id="model-name" required maxlength="80" placeholder="例如：Gemma 免费模型"></label>
-              <label>用途
-                <select id="model-role" required>
-                  <option value="redactor">脱敏模型</option>
-                  <option value="router">路由模型</option>
-                  <option value="target">目标模型</option>
-                </select>
-              </label>
-              <label class="wide">OpenAI 兼容地址<input id="model-base-url" required type="url" maxlength="500" placeholder="https://provider.example/v1/chat/completions"></label>
-              <label>Provider model<input id="model-provider-name" required maxlength="200" placeholder="provider/model-name"></label>
+              <label>显示名称<input id="model-name" required maxlength="80" placeholder="例如：低成本通用模型"></label>
+              <label>用途<select id="model-role" required><option value="redactor">脱敏模型</option><option value="router">路由模型</option><option value="target">目标模型</option></select></label>
+              <label class="wide">Base URL<input id="model-base-url" required type="url" maxlength="500" placeholder="https://provider.example/v1"><span class="field-hint">填写 `/v1`，不要填写 `/chat/completions`。</span></label>
               <label>API Key<input id="model-api-key" type="password" maxlength="1000" placeholder="编辑时留空以保留当前密钥"></label>
+              <div class="wide provider-picker">
+                <div class="picker-heading"><label>Provider 模型<input id="model-provider-name" required maxlength="200" placeholder="先获取模型列表，或手动输入 model ID"></label><button id="fetch-provider-models" class="ghost" type="button">获取模型列表</button></div>
+                <label>模糊搜索模型<input id="model-fuzzy-search" maxlength="200" placeholder="输入名称、厂商或任意字符筛选"></label>
+                <div id="provider-model-status" class="field-hint" role="status">尚未加载模型列表。</div>
+                <div id="provider-model-options" class="provider-model-options" aria-live="polite"></div>
+              </div>
               <label>输入单价 / 百万 token (USD)<input id="model-input-price" type="number" min="0" step="0.000001" value="0"></label>
               <label>输出单价 / 百万 token (USD)<input id="model-output-price" type="number" min="0" step="0.000001" value="0"></label>
               <label class="toggle"><input id="model-active" type="checkbox" checked> 启用该模型</label>
@@ -140,31 +74,32 @@
             </form>
             <div id="models-list" class="models-list"></div>
           </article>
+        </section>
 
-          <article class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">POLICY</p>
-                <h2>脱敏与路由规则</h2>
-              </div>
-            </div>
-            <form id="rules-form" class="stacked-form">
-              <label>脱敏 Markdown 规则<textarea id="redaction-rule" maxlength="12000" required></textarea></label>
-              <label>路由 Markdown 规则<textarea id="routing-rule" maxlength="12000" required></textarea></label>
-              <button class="primary" type="submit">保存规则</button>
-            </form>
+        <section class="app-view" data-view="rules" hidden>
+          <article class="panel policy-panel">
+            <div class="panel-heading"><div><p class="eyebrow">POLICY</p><h2>脱敏与路由提示词</h2><p class="panel-copy">推荐规则包含敏感信息类别、保留原则、路由决策顺序和受限 JSON 输出格式。可按业务场景调整。</p></div><button id="restore-default-rules" class="ghost" type="button">恢复推荐规则</button></div>
+            <form id="rules-form" class="stacked-form"><label>脱敏 Markdown 规则<textarea id="redaction-rule" maxlength="12000" required></textarea></label><label>路由 Markdown 规则<textarea id="routing-rule" maxlength="12000" required></textarea></label><button class="primary" type="submit">保存规则</button></form>
           </article>
         </section>
 
-        <dialog id="password-dialog" class="password-dialog" aria-labelledby="password-title">
-          <form id="password-form" class="stacked-form">
-            <div class="panel-heading"><h2 id="password-title">修改密码</h2><button id="close-password-dialog" class="ghost" type="button">关闭</button></div>
-            <label>当前密码<input id="current-password" type="password" minlength="1" maxlength="256" required autocomplete="current-password"></label>
-            <label>新密码<input id="new-password" type="password" minlength="12" maxlength="256" required autocomplete="new-password"><span class="field-hint">12–15 位需含至少三类字符；16 位以上可使用长密码短语。</span></label>
-            <p id="password-message" class="form-message" role="status"></p>
-            <button class="primary" type="submit">更新密码并使旧会话失效</button>
-          </form>
-        </dialog>
+        <section class="app-view" data-view="audit" hidden>
+          <article class="panel audit-panel">
+            <div class="panel-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>最近调用</h2><p class="panel-copy">只显示当前账户记录；原始用户消息不会保存。</p></div><div class="model-actions"><button id="refresh-calls" class="ghost" type="button">刷新</button><button id="clear-calls" class="ghost danger" type="button">清除记录</button></div></div>
+            <div class="audit-scroll"><table><thead><tr><th>时间</th><th>类型</th><th>目标模型</th><th>脱敏内容</th><th>消费</th><th>状态</th></tr></thead><tbody id="calls-table"></tbody></table></div>
+          </article>
+        </section>
+
+        <section class="app-view" data-view="evaluation" hidden>
+          <section class="quality-signals" aria-label="运行质量信号">
+            <div class="signals-heading"><p class="eyebrow">EVALUATION SIGNALS</p><span>运行指标，用于迭代规则与模型配置；它们不替代人工标注的语义准确率评估。</span></div>
+            <article class="signal-card"><span>脱敏拦截</span><strong id="signal-privacy">0</strong><small id="signal-privacy-note" class="muted">暂无聊天调用</small></article>
+            <article class="signal-card"><span>路由结构合规</span><strong id="signal-routing">—</strong><small id="signal-routing-note" class="muted">暂无成功调用</small></article>
+            <article class="signal-card"><span>成本可核验</span><strong id="signal-cost">—</strong><small id="signal-cost-note" class="muted">暂无成功调用</small></article>
+          </section>
+        </section>
+
+        <dialog id="password-dialog" class="password-dialog" aria-labelledby="password-title"><form id="password-form" class="stacked-form"><div class="panel-heading"><h2 id="password-title">修改密码</h2><button id="close-password-dialog" class="ghost" type="button">关闭</button></div><label>当前密码<input id="current-password" type="password" minlength="1" maxlength="256" required autocomplete="current-password"></label><label>新密码<input id="new-password" type="password" minlength="12" maxlength="256" required autocomplete="new-password"><span class="field-hint">12–15 位需含至少三类字符；16 位以上可使用长密码短语。</span></label><p id="password-message" class="form-message" role="status"></p><button class="primary" type="submit">更新密码并使旧会话失效</button></form></dialog>
       </section>
     </main>
     <script src="/static/app.js" defer></script>

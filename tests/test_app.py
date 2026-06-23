@@ -21,6 +21,7 @@ os.environ["TRUSTED_HOSTS"] = "testserver"
 from app import main as application  # noqa: E402
 from app.provider import Completion, Usage  # noqa: E402
 from app.provider import ProviderError, chat_completion  # noqa: E402
+from app.database import DEFAULT_RULES  # noqa: E402
 
 
 def client() -> TestClient:
@@ -38,7 +39,7 @@ def model_payload(name: str, role: str) -> dict[str, object]:
     return {
         "name": name,
         "role": role,
-        "base_url": "https://provider.example/v1/chat/completions",
+        "base_url": "https://provider.example/v1",
         "api_key": "test-provider-key",
         "model_name": f"example/{name}",
         "input_price_per_million": 1.0,
@@ -346,3 +347,54 @@ def test_provider_rate_limit_is_safe_and_includes_retry_guidance(monkeypatch) ->
     else:
         raise AssertionError("Expected ProviderError")
     assert captured["trust_env"] is False
+
+
+def test_model_picker_lists_provider_models_without_returning_credentials(monkeypatch) -> None:
+    received = {}
+
+    async def fake_models(*, base_url, api_key):
+        received.update({"base_url": base_url, "api_key": api_key})
+        return ["budget/model", "reasoning/model"]
+
+    monkeypatch.setattr(application, "fetch_provider_models", fake_models)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        response = test_client.post(
+            "/api/provider-models",
+            headers=headers,
+            json={"base_url": "https://provider.example/v1", "api_key": "temporary-key"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"models": ["budget/model", "reasoning/model"]}
+        assert received == {"base_url": "https://provider.example/v1", "api_key": "temporary-key"}
+        compatible_prefix = test_client.post(
+            "/api/provider-models",
+            headers=headers,
+            json={"base_url": "https://openrouter.ai/api/v1", "api_key": "temporary-key"},
+        )
+        assert compatible_prefix.status_code == 200
+        invalid = test_client.post(
+            "/api/provider-models",
+            headers=headers,
+            json={"base_url": "https://provider.example/v1/chat/completions", "api_key": "temporary-key"},
+        )
+        assert invalid.status_code == 422
+
+
+def test_saved_model_picker_uses_encrypted_key_and_default_rules_are_detailed(monkeypatch) -> None:
+    async def fake_models(*, base_url, api_key):
+        assert base_url == "https://provider.example/v1"
+        assert api_key == "test-provider-key"
+        return ["provider/available-model"]
+
+    monkeypatch.setattr(application, "fetch_provider_models", fake_models)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        created = test_client.post("/api/models", headers=headers, json=model_payload("target", "target"))
+        available = test_client.post(f"/api/models/{created.json()['id']}/available-models", headers=headers)
+        assert available.status_code == 200
+        assert available.json() == {"models": ["provider/available-model"]}
+        defaults = test_client.get("/api/rules/defaults").json()
+        assert defaults == DEFAULT_RULES
+        assert len(defaults["redaction"]) > 500
+        assert len(defaults["routing"]) > 400

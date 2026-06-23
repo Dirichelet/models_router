@@ -25,8 +25,8 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import Settings
-from .database import Database
-from .provider import Completion, ProviderError, Usage, chat_completion
+from .database import DEFAULT_RULES, Database
+from .provider import Completion, ProviderError, Usage, available_models as fetch_provider_models, chat_completion
 from .security import PasswordHasher, SecretBox, new_token, token_hash
 
 
@@ -134,6 +134,16 @@ class PasswordChange(BaseModel):
         return Credentials.validate_password_strength(value)
 
 
+def normalize_openai_v1_base_url(value: str) -> str:
+    normalized = value.rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("base_url must be a complete http(s) URL")
+    if not parsed.path.rstrip("/").endswith("/v1"):
+        raise ValueError("base_url must end with /v1, for example https://provider.example/v1")
+    return normalized
+
+
 class ModelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     role: Literal["redactor", "router", "target"]
@@ -147,10 +157,7 @@ class ModelCreate(BaseModel):
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, value: str) -> str:
-        parsed = urlparse(value)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("base_url must be a complete http(s) URL")
-        return value.rstrip("/")
+        return normalize_openai_v1_base_url(value)
 
 
 class ModelUpdate(BaseModel):
@@ -169,6 +176,16 @@ class ModelUpdate(BaseModel):
         if value is None:
             return value
         return ModelCreate.validate_base_url(value)
+
+
+class ProviderModelsRequest(BaseModel):
+    base_url: str = Field(min_length=8, max_length=500)
+    api_key: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        return normalize_openai_v1_base_url(value)
 
 
 class RulesUpdate(BaseModel):
@@ -510,6 +527,32 @@ def pipeline_status(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict
     return _pipeline_status()
 
 
+@app.post("/api/provider-models")
+async def provider_models(
+    request: ProviderModelsRequest,
+    _: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> dict[str, list[str]]:
+    try:
+        return {"models": await fetch_provider_models(base_url=request.base_url, api_key=request.api_key)}
+    except ProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)[:300]) from exc
+
+
+@app.post("/api/models/{model_id}/available-models")
+async def saved_model_available_models(
+    model_id: int,
+    _: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> dict[str, list[str]]:
+    with database.connection() as connection:
+        model = connection.execute("SELECT base_url, api_key_encrypted FROM models WHERE id = ?", (model_id,)).fetchone()
+    if not model:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    try:
+        return {"models": await fetch_provider_models(base_url=model["base_url"], api_key=secret_box.decrypt(model["api_key_encrypted"]))}
+    except (ProviderError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)[:300]) from exc
+
+
 @app.post("/api/models", status_code=status.HTTP_201_CREATED)
 def create_model(
     model: ModelCreate,
@@ -639,6 +682,11 @@ async def test_model_connection(
 @app.get("/api/rules")
 def get_rules(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, str]:
     return _rules()
+
+
+@app.get("/api/rules/defaults")
+def default_rules(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, str]:
+    return DEFAULT_RULES.copy()
 
 
 @app.put("/api/rules")

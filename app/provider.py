@@ -38,6 +38,25 @@ def _endpoint(base_url: str) -> str:
     return f"{normalized}/v1/chat/completions"
 
 
+def _models_endpoint(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        normalized = normalized.removesuffix("/chat/completions")
+    if normalized.endswith("/v1"):
+        return f"{normalized}/models"
+    return f"{normalized}/v1/models"
+
+
+def _raise_for_provider_error(response: httpx.Response) -> None:
+    if response.status_code < 400:
+        return
+    if response.status_code == 429:
+        retry_after = response.headers.get("retry-after")
+        suffix = f" Retry after {retry_after} seconds." if retry_after and retry_after.isdecimal() else " Retry later."
+        raise ProviderError(f"Model provider rate limited the request.{suffix}", status_code=429)
+    raise ProviderError(f"Model provider returned HTTP {response.status_code}", status_code=response.status_code)
+
+
 async def chat_completion(
     *,
     base_url: str,
@@ -62,12 +81,7 @@ async def chat_completion(
     except httpx.HTTPError as exc:
         raise ProviderError("Could not reach the configured model provider") from exc
 
-    if response.status_code >= 400:
-        if response.status_code == 429:
-            retry_after = response.headers.get("retry-after")
-            suffix = f" Retry after {retry_after} seconds." if retry_after and retry_after.isdecimal() else " Retry later."
-            raise ProviderError(f"Model provider rate limited the request.{suffix}", status_code=429)
-        raise ProviderError(f"Model provider returned HTTP {response.status_code}", status_code=response.status_code)
+    _raise_for_provider_error(response)
 
     try:
         payload: dict[str, Any] = response.json()
@@ -85,3 +99,24 @@ async def chat_completion(
         return Completion(content=content.strip(), usage=usage)
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise ProviderError("Model provider returned an invalid chat-completions response") from exc
+
+
+async def available_models(*, base_url: str, api_key: str) -> list[str]:
+    """Retrieve model IDs from an OpenAI-compatible ``/v1/models`` endpoint."""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+            response = await client.get(
+                _models_endpoint(base_url),
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.HTTPError as exc:
+        raise ProviderError("Could not reach the configured model provider") from exc
+    _raise_for_provider_error(response)
+    try:
+        data = response.json().get("data")
+        if not isinstance(data, list):
+            raise ValueError("missing data array")
+        models = {entry["id"].strip() for entry in data if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"].strip()}
+        return sorted(models, key=str.casefold)[:1000]
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ProviderError("Model provider returned an invalid models response") from exc
