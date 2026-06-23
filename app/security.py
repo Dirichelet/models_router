@@ -63,7 +63,7 @@ class SecretBox:
         try:
             return self._fernet.decrypt(value.encode("utf-8")).decode("utf-8")
         except InvalidToken as exc:
-            raise ValueError("Stored model credentials cannot be decrypted") from exc
+            raise ValueError("Model API key must be re-entered because FERNET_KEY changed") from exc
 
 
 def new_token() -> str:

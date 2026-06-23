@@ -349,6 +349,11 @@ def _set_session(response: Response, user_id: int) -> str:
 
 
 def _serialise_model(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        secret_box.decrypt(row["api_key_encrypted"])
+        credential_ready = True
+    except ValueError:
+        credential_ready = False
     return {
         "id": row["id"],
         "name": row["name"],
@@ -359,6 +364,7 @@ def _serialise_model(row: sqlite3.Row) -> dict[str, Any]:
         "output_price_per_million": row["output_price_per_million"],
         "is_active": bool(row["is_active"]),
         "has_api_key": bool(row["api_key_encrypted"]),
+        "credential_ready": credential_ready,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -386,23 +392,42 @@ def _active_pipeline() -> tuple[sqlite3.Row, sqlite3.Row, list[sqlite3.Row]]:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Configure one active redactor, one active router, and at least one active target model first",
         )
+    invalid_models = []
+    for model in [redactor, router, *targets]:
+        try:
+            secret_box.decrypt(model["api_key_encrypted"])
+        except ValueError:
+            invalid_models.append(model["name"])
+    if invalid_models:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Re-enter the API Key for: {', '.join(invalid_models)}",
+        )
     return redactor, router, targets
 
 
 def _pipeline_status() -> dict[str, Any]:
     with database.connection() as connection:
         redactor = connection.execute(
-            "SELECT name FROM models WHERE role = 'redactor' AND is_active = 1 ORDER BY id DESC LIMIT 1"
+            "SELECT name, api_key_encrypted FROM models WHERE role = 'redactor' AND is_active = 1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
         router = connection.execute(
-            "SELECT name FROM models WHERE role = 'router' AND is_active = 1 ORDER BY id DESC LIMIT 1"
+            "SELECT name, api_key_encrypted FROM models WHERE role = 'router' AND is_active = 1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        targets = connection.execute("SELECT COUNT(*) AS count FROM models WHERE role = 'target' AND is_active = 1").fetchone()
+        targets = connection.execute("SELECT name, api_key_encrypted FROM models WHERE role = 'target' AND is_active = 1").fetchall()
+    active_models = [model for model in (redactor, router) if model] + list(targets)
+    invalid_credentials = []
+    for model in active_models:
+        try:
+            secret_box.decrypt(model["api_key_encrypted"])
+        except ValueError:
+            invalid_credentials.append(model["name"])
     return {
         "redactor": redactor["name"] if redactor else None,
         "router": router["name"] if router else None,
-        "active_targets": int(targets["count"]),
-        "ready": bool(redactor and router and targets["count"]),
+        "active_targets": len(targets),
+        "invalid_credentials": invalid_credentials,
+        "ready": bool(redactor and router and targets and not invalid_credentials),
     }
 
 

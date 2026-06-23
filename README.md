@@ -11,10 +11,11 @@ uv sync --dev
 
 export APP_ENV=development
 export COOKIE_SECURE=false
-export FERNET_KEY="$(uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
 
 uv run python main.py
 ```
+
+开发模式首次启动会在 `data/.dev-fernet.key` 生成并持久保存本地加密密钥；后续启动会复用它。不要删除该文件或每次手动更换 `FERNET_KEY`，否则已保存的模型 API Key 需要重新填写。
 
 打开 `http://127.0.0.1:9898`。开发模式不要求启动令牌。
 
@@ -23,7 +24,7 @@ uv run python main.py
 1. 创建唯一的管理员账户。密码至少 12 位；12–15 位需包含至少三类字符，16 位以上可使用长密码短语。
 2. 在“模型配置”创建并启用三个角色：一个脱敏模型、一个路由模型和至少一个目标模型。Base URL 必须以 `/v1` 结尾，例如 `https://openrouter.ai/api/v1`。
 3. 填写 Base URL 和 API Key 后，点击或聚焦“Provider 模型”会自动获取模型列表；可按厂商或模型名模糊搜索。脱敏模型和路由模型单选，目标模型可多选并在保存时自动创建多条目标模型配置。
-4. 分别点击“测试”确认模型连通性。API Key 只以加密形式保存，编辑时不会回显。
+4. 分别点击“测试”确认模型连通性。API Key 只以加密形式保存，编辑时不会回显。若模型卡片提示“API Key 需重填”，点击编辑并重新输入该模型的 API Key 后保存即可。
 5. 在“提示词规则”中调整 Markdown 规则；可点击“恢复推荐规则”填入详细的脱敏与路由规则。
 6. 页面显示“已就绪”后，在聊天窗口输入消息。界面会展示脱敏结果、路由模型选择、token、消费和审计记录。
 

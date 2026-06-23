@@ -22,6 +22,8 @@ from app import main as application  # noqa: E402
 from app.provider import Completion, Usage  # noqa: E402
 from app.provider import ProviderError, chat_completion  # noqa: E402
 from app.database import DEFAULT_RULES  # noqa: E402
+from app.config import Settings  # noqa: E402
+from app.security import SecretBox  # noqa: E402
 
 
 def client() -> TestClient:
@@ -277,6 +279,7 @@ def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
             "redactor": None,
             "router": None,
             "active_targets": 0,
+            "invalid_credentials": [],
             "ready": False,
         }
         for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
@@ -286,6 +289,34 @@ def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
         assert status["redactor"] == "redactor"
         assert status["router"] == "router"
         assert status["active_targets"] == 1
+        assert status["invalid_credentials"] == []
+
+
+def test_development_fernet_key_is_created_once_and_reused(monkeypatch, tmp_path) -> None:
+    database_path = tmp_path / "data" / "models_router.db"
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DATABASE_PATH", str(database_path))
+    monkeypatch.delenv("FERNET_KEY", raising=False)
+    first = Settings.from_environment()
+    second = Settings.from_environment()
+    assert first.fernet_key == second.fernet_key
+    assert (database_path.parent / ".dev-fernet.key").read_text(encoding="utf-8") == first.fernet_key
+
+
+def test_models_with_a_changed_fernet_key_are_marked_for_reentry(monkeypatch) -> None:
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
+            assert test_client.post("/api/models", headers=headers, json=model_payload(name, role)).status_code == 201
+        monkeypatch.setattr(application, "secret_box", SecretBox(Fernet.generate_key().decode()))
+        models = test_client.get("/api/models").json()
+        assert all(model["credential_ready"] is False for model in models)
+        pipeline = test_client.get("/api/pipeline/status").json()
+        assert pipeline["ready"] is False
+        assert pipeline["invalid_credentials"] == ["redactor", "router", "target"]
+        response = test_client.post("/api/chat", headers=headers, json={"message": "Hello"})
+        assert response.status_code == 422
+        assert "Re-enter the API Key" in response.json()["detail"]
 
 
 def test_audit_records_and_statistics_are_scoped_to_the_current_user() -> None:

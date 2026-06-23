@@ -57,6 +57,12 @@ function renderEvaluation(evaluation) {
 function renderPipelineStatus(pipeline) {
   const pill = $("#pipeline-status");
   const submit = $("#chat-submit");
+  if (pipeline.invalid_credentials?.length) {
+    pill.textContent = `需重填 API Key：${pipeline.invalid_credentials.join("、")}`;
+    pill.classList.add("warning");
+    submit.disabled = true;
+    return;
+  }
   if (pipeline.ready) {
     pill.textContent = `已就绪：${pipeline.redactor} → ${pipeline.router} → ${pipeline.active_targets} 个目标`;
     pill.classList.remove("warning");
@@ -110,7 +116,7 @@ function renderModels() {
   }
   const roleLabel = (role) => ({ redactor: "脱敏模型", router: "路由模型", target: "目标模型" })[role] || role;
   container.innerHTML = state.models.map((model) => `
-    <div class="model-row"><div><h3>${escapeHtml(model.name)} <span class="role-tag ${escapeHtml(model.role)}">${roleLabel(model.role)}</span> ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"}</h3>
+    <div class="model-row"><div><h3>${escapeHtml(model.name)} <span class="role-tag ${escapeHtml(model.role)}">${roleLabel(model.role)}</span> ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"} ${model.credential_ready ? "" : "<span class=\"credential-warning\">API Key 需重填</span>"}</h3>
     <p>${escapeHtml(model.role)} · ${escapeHtml(model.model_name)} · $${Number(model.input_price_per_million).toFixed(4)}/$${Number(model.output_price_per_million).toFixed(4)} 每百万 token</p></div>
     <div class="model-actions"><button class="ghost test-model" data-id="${model.id}" type="button">测试</button><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button><button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div></div>`).join("");
 }
