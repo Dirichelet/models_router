@@ -395,6 +395,14 @@ def test_model_spans_accept_transformers_numeric_scores() -> None:
     assert merged_count == 1
     assert merged == "My name is [PERSON]."
 
+    protected, protected_count = _apply_model_spans(
+        "Contact [EMAIL] for Alice.",
+        [{"entity_group": "private_person", "score": 0.99, "start": 9, "end": 14}],
+        0.5,
+    )
+    assert protected_count == 0
+    assert protected == "Contact [EMAIL] for Alice."
+
 
 def test_local_redactor_uses_only_a_validated_local_path_without_duplicate_local_files_flag(monkeypatch, tmp_path) -> None:
     import transformers

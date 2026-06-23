@@ -61,6 +61,22 @@ uv run python main.py
 
 路径不存在、模型加载失败或缺少依赖时，页面会禁用聊天并显示具体原因。不要把本地模型路径或这些环境变量放到网页表单中。
 
+### 脱敏评测
+
+项目内置基于 [MultiPriv-PII](https://github.com/CyberChangAn/MultiPriv-PII) 的可重复本地评测。首次运行只会下载公开基准数据到 `tests/.multipriv-cache/`（已被 Git 忽略）；评测不会调用 Provider，也不会上传业务消息。它按结构化 PII 字段和实际替换区间计算 precision、recall、F1，并默认要求三项均不低于 0.85：
+
+```bash
+uv run python tests/eval_redaction.py
+```
+
+已有缓存且需要禁止联网时：
+
+```bash
+uv run python tests/eval_redaction.py --offline
+```
+
+可用 `--threshold 0.90` 提高发布门禁。评测规则会校验其追踪的替换结果与生产 `app.redaction` 的规则输出完全一致，避免评测逻辑与运行逻辑漂移。
+
 ## 供其他 Agent / Chat 客户端调用
 
 在网页的“服务 API”页签生成专用 API Key。完整 Key 只显示一次，妥善保存。然后将其他客户端的 OpenAI Base URL 指向本服务的 `/v1`：本地开发示例为 `http://127.0.0.1:9898/v1`。
