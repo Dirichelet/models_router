@@ -96,6 +96,19 @@ CREATE TABLE IF NOT EXISTS rules (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS keyword_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phrase TEXT NOT NULL CHECK(length(phrase) BETWEEN 1 AND 200),
+    replacement TEXT NOT NULL CHECK(length(replacement) BETWEEN 1 AND 80),
+    is_fuzzy INTEGER NOT NULL DEFAULT 0 CHECK(is_fuzzy IN (0, 1)),
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, phrase)
+);
+CREATE INDEX IF NOT EXISTS idx_keyword_rules_user_active ON keyword_rules(user_id, is_active);
+
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,

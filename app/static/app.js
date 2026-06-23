@@ -1,4 +1,4 @@
-const state = { csrfToken: null, models: [], providerModels: [], selectedProviderModels: new Set(), providerModelsLoading: false, chatHistory: [] };
+const state = { csrfToken: null, models: [], providerModels: [], selectedProviderModels: new Set(), providerModelsLoading: false, chatHistory: [], keywordRules: [] };
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char]);
@@ -106,10 +106,11 @@ function renderServiceApi(keyStatus) {
 }
 
 async function loadDashboard() {
-  const [models, rules, calls, stats, evaluation, pipeline, serviceKey] = await Promise.all([
-    api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation"), api("/api/pipeline/status"), api("/api/service-key"),
+  const [models, rules, calls, stats, evaluation, pipeline, serviceKey, keywordRules] = await Promise.all([
+    api("/api/models"), api("/api/rules"), api("/api/calls"), api("/api/stats"), api("/api/evaluation"), api("/api/pipeline/status"), api("/api/service-key"), api("/api/keyword-rules"),
   ]);
   state.models = models;
+  state.keywordRules = keywordRules;
   renderModels();
   renderCalls(calls);
   $("#redaction-rule").value = rules.redaction || "";
@@ -121,6 +122,7 @@ async function loadDashboard() {
   renderEvaluation(evaluation);
   renderPipelineStatus(pipeline);
   renderServiceApi(serviceKey);
+  renderKeywordRules();
 }
 
 function renderModels() {
@@ -129,11 +131,11 @@ function renderModels() {
     container.innerHTML = '<div class="empty-state">尚未配置模型。API Key 仅以加密形式保存在服务器。</div>';
     return;
   }
-  const roleLabel = (role) => ({ redactor: "脱敏模型", router: "路由模型", target: "目标模型" })[role] || role;
+  const roleLabel = (role) => ({ redactor: "旧 Provider 脱敏（不会调用）", router: "路由模型", target: "目标模型" })[role] || role;
   container.innerHTML = state.models.map((model) => `
     <div class="model-row"><div><h3>${escapeHtml(model.name)} <span class="role-tag ${escapeHtml(model.role)}">${roleLabel(model.role)}</span> ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"} ${model.credential_ready ? "" : "<span class=\"credential-warning\">API Key 需重填</span>"}</h3>
     <p>${escapeHtml(model.role)} · ${escapeHtml(model.model_name)} · $${Number(model.input_price_per_million).toFixed(4)}/$${Number(model.output_price_per_million).toFixed(4)} 每百万 token</p></div>
-    <div class="model-actions"><button class="ghost test-model" data-id="${model.id}" type="button">测试</button><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button><button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div></div>`).join("");
+    <div class="model-actions">${model.role === "redactor" ? "" : `<button class="ghost test-model" data-id="${model.id}" type="button">测试</button><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button>`}<button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div></div>`).join("");
 }
 
 function renderCalls(calls) {
@@ -144,6 +146,14 @@ function renderCalls(calls) {
     <td title="${escapeHtml(call.redacted_message || call.error_message || "")}">${escapeHtml((call.redacted_message || call.error_message || "—").slice(0, 180))}</td>
     <td>${call.cost_known ? `$${Number(call.total_cost || 0).toFixed(6)}` : "待 Provider 确认"}<br><span class="muted">${call.prompt_tokens + call.completion_tokens} tokens</span></td>
     <td class="status-${escapeHtml(call.status)}">${escapeHtml(call.status)}</td></tr>`).join("");
+}
+
+function renderKeywordRules() {
+  const container = $("#keyword-rules-list");
+  if (!state.keywordRules.length) { container.innerHTML = '<div class="empty-state">尚未配置关键词规则。</div>'; return; }
+  container.innerHTML = state.keywordRules.map((rule) => `
+    <div class="keyword-rule ${rule.is_active ? "" : "inactive"}"><div><strong>${escapeHtml(rule.phrase)}</strong> <span class="muted">→</span> <code>${escapeHtml(rule.replacement)}</code><div class="muted">${rule.is_fuzzy ? "模糊匹配" : "精确匹配"} · ${rule.is_active ? "已启用" : "已停用"}</div></div>
+    <div class="model-actions"><button class="ghost toggle-keyword-rule" data-id="${rule.id}" type="button">${rule.is_active ? "停用" : "启用"}</button><button class="ghost danger delete-keyword-rule" data-id="${rule.id}" type="button">删除</button></div></div>`).join("");
 }
 
 function fuzzyMatch(value, query) {
@@ -160,7 +170,8 @@ function fuzzyMatch(value, query) {
 }
 
 function renderProviderModels() {
-  const query = $("#model-fuzzy-search").value;
+  const selectionText = [...state.selectedProviderModels].join(", ");
+  const query = $("#model-provider-name").value === selectionText ? "" : $("#model-provider-name").value;
   const options = state.providerModels.filter((model) => fuzzyMatch(model, query)).slice(0, 80);
   const target = $("#provider-model-options");
   if (!state.providerModels.length) { target.innerHTML = ""; return; }
@@ -185,7 +196,6 @@ function resetModelForm() {
   state.providerModels = [];
   state.selectedProviderModels = new Set();
   state.providerModelsLoading = false;
-  $("#model-fuzzy-search").value = "";
   $("#provider-model-options").innerHTML = "";
   $("#provider-model-status").textContent = "尚未加载模型列表。";
   $("#model-selection-count").textContent = "未选择";
@@ -194,6 +204,7 @@ function resetModelForm() {
 function editModel(id) {
   const model = state.models.find((item) => item.id === id);
   if (!model) return;
+  if (model.role === "redactor") { setMessage("Provider 脱敏模型已停用；请配置服务器本地脱敏环境变量，或删除旧配置。 "); return; }
   showView("models");
   $("#model-id").value = model.id;
   $("#model-name").value = model.name;
@@ -233,7 +244,6 @@ async function ensureProviderModels() {
 function clearProviderModels() {
   state.providerModels = [];
   state.selectedProviderModels = new Set();
-  $("#model-fuzzy-search").value = "";
   $("#model-selection-count").textContent = "未选择";
   $("#provider-model-options").innerHTML = "";
   $("#provider-model-status").textContent = "填写 Base URL 和 API Key 后，点击此区域会自动加载模型列表。";
@@ -353,9 +363,8 @@ $("#model-provider-name").addEventListener("input", () => {
     $("#model-selection-count").textContent = "手动输入";
     renderProviderModels();
   }
+  ensureProviderModels();
 });
-$("#model-fuzzy-search").addEventListener("focus", ensureProviderModels);
-$("#model-fuzzy-search").addEventListener("input", () => { ensureProviderModels(); renderProviderModels(); });
 $("#model-base-url").addEventListener("input", clearProviderModels);
 $("#model-api-key").addEventListener("input", clearProviderModels);
 $("#model-role").addEventListener("change", () => {
@@ -409,6 +418,28 @@ $("#copy-service-key").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(key); setMessage("服务 API Key 已复制。", "success"); } catch (_) { setMessage("浏览器未允许自动复制，请手动复制 Key。", "error"); }
 });
 $("#rules-form").addEventListener("submit", async (event) => { event.preventDefault(); try { await api("/api/rules", { method: "PUT", body: JSON.stringify({ redaction: $("#redaction-rule").value, routing: $("#routing-rule").value }) }); setMessage("规则已保存。", "success"); } catch (error) { setMessage(error.message); } });
+$("#keyword-rule-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/keyword-rules", { method: "POST", body: JSON.stringify({ phrase: $("#keyword-phrase").value.trim(), replacement: $("#keyword-replacement").value.trim(), is_fuzzy: $("#keyword-fuzzy").checked }) });
+    event.currentTarget.reset(); $("#keyword-replacement").value = "[KEYWORD]";
+    state.keywordRules = await api("/api/keyword-rules"); renderKeywordRules(); setMessage("关键词规则已添加。", "success");
+  } catch (error) { setMessage(error.message); }
+});
+$("#keyword-rules-list").addEventListener("click", async (event) => {
+  const id = Number(event.target.dataset.id); if (!id) return;
+  const rule = state.keywordRules.find((item) => item.id === id); if (!rule) return;
+  try {
+    if (event.target.classList.contains("delete-keyword-rule")) {
+      await api(`/api/keyword-rules/${id}`, { method: "DELETE" });
+      setMessage("关键词规则已删除。", "success");
+    } else if (event.target.classList.contains("toggle-keyword-rule")) {
+      await api(`/api/keyword-rules/${id}`, { method: "PUT", body: JSON.stringify({ is_active: !rule.is_active }) });
+      setMessage("关键词规则状态已更新。", "success");
+    } else return;
+    state.keywordRules = await api("/api/keyword-rules"); renderKeywordRules();
+  } catch (error) { setMessage(error.message); }
+});
 $("#chat-form").addEventListener("submit", async (event) => {
   event.preventDefault(); const input = $("#chat-message"), button = $("#chat-submit"), message = input.value.trim(); if (!message) return;
   appendChat("user", message); input.value = ""; button.disabled = true;

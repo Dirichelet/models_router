@@ -22,26 +22,34 @@ uv run python main.py
 ### 首次配置
 
 1. 创建唯一的管理员账户。密码至少 12 位；12–15 位需包含至少三类字符，16 位以上可使用长密码短语。
-2. 在“模型配置”至少创建并启用一个目标模型。脱敏模型和路由模型均为可选：未配置脱敏模型时消息原样传给后续模型，但仍不会写入审计记录；未配置路由模型时，服务会按问题难度选择低、中或高费率候选模型。Base URL 必须以 `/v1` 结尾，例如 `https://openrouter.ai/api/v1`。
-3. 填写 Base URL 和 API Key 后，点击或聚焦“Provider 模型”会自动获取模型列表；可按厂商或模型名模糊搜索。脱敏模型和路由模型单选，目标模型可多选并在保存时自动创建多条目标模型配置。
+2. 在“模型配置”至少创建并启用一个目标模型。脱敏模型只在服务器本地运行，不会调用 Provider；未配置本地脱敏时消息原样传给后续模型，但原文仍不会写入审计记录。路由模型可选；未配置时服务会按问题难度选择低、中或高费率候选模型。Base URL 必须以 `/v1` 结尾，例如 `https://openrouter.ai/api/v1`。
+3. 填写 Base URL 和 API Key 后，点击“Provider 模型 / 搜索”输入框会自动获取模型列表；直接输入名称、厂商或任意字符即可模糊筛选。路由模型单选，目标模型可多选并在保存时自动创建多条目标模型配置。
 4. 分别点击“测试”确认模型连通性。API Key 只以加密形式保存，编辑时不会回显。若模型卡片提示“API Key 需重填”，点击编辑并重新输入该模型的 API Key 后保存即可。
-5. 在“提示词规则”中调整 Markdown 规则；可点击“恢复推荐规则”填入详细的脱敏与路由规则。
+5. 在“本地脱敏与路由规则”中管理关键词规则。关键词可精确或模糊匹配（忽略大小写、空格、句点、下划线、连字符），会在本地模型识别前替换；路由 Markdown 规则用于 Provider 或本地 GGUF 路由模型。
 6. 页面显示“已就绪”后，在聊天窗口输入消息。浏览器会在内存中保留最近 8 轮对话作为上下文，可用“清除上下文”开始新对话；这些原始上下文不会写入数据库。界面会展示脱敏结果（如启用）、路由选择、token、消费和审计记录。
 
 原始消息不会写进审计记录；如需删除已保存的脱敏内容和消费记录，可在“最近调用”区域点击“清除记录”。
 
-### 可选：从后端环境变量加载本地 GGUF 脱敏/分类模型
+### 可选：从后端环境变量加载本地脱敏/分类模型
 
-本地模型不在网页上传或配置，避免将模型路径和运行参数暴露给浏览器。仅支持 GGUF 文件，使用 `llama-cpp-python` 运行。先安装可选依赖：
+本地模型不在网页上传或配置，避免将模型路径和运行参数暴露给浏览器。脱敏使用 `transformers` 本地目录，并强制 `local_files_only=True`：运行期不会下载模型或发送内容到 Provider。链路为 Regex（手机号、身份证、邮箱、密钥、IP 等）→ `openai/privacy-filter` → 可选中文 NER。模型目录须在启动前已下载到服务器。
+
+```bash
+export LOCAL_REDACTOR_MODEL_PATH=/absolute/path/openai-privacy-filter
+export LOCAL_CHINESE_NER_MODEL_PATH=/absolute/path/chinese-ner  # 可选
+export LOCAL_REDACTOR_DEVICE=cpu                                # 或 cuda:0
+export LOCAL_REDACTOR_MIN_SCORE=0.5
+
+uv run python main.py
+```
+
+本地 GGUF 只用于可选路由/分类模型，需要安装额外依赖：
 
 ```bash
 uv sync --extra local-gguf
 ```
 
-启动前设置绝对路径；本地模型会优先于网页中同角色的 Provider 配置。`LOCAL_REDACTOR_MODEL_PATH` 用于脱敏，`LOCAL_CLASSIFIER_MODEL_PATH` 用于分类/路由；任一变量未设置时，会分别回退到网页 Provider 模型或默认策略。
-
 ```bash
-export LOCAL_REDACTOR_MODEL_PATH=/absolute/path/redactor.gguf
 export LOCAL_CLASSIFIER_MODEL_PATH=/absolute/path/classifier.gguf
 export LOCAL_GGUF_CHAT_FORMAT=chatml       # 按模型模板调整，可省略
 export LOCAL_GGUF_CONTEXT_TOKENS=4096
@@ -51,7 +59,7 @@ export LOCAL_GGUF_THREADS=0                # 0 表示 llama.cpp 默认值
 uv run python main.py
 ```
 
-路径不存在、模型加载失败或未安装 `local-gguf` 依赖时，页面会禁用聊天并显示具体原因。不要把本地模型路径或这些环境变量放到网页表单中。
+路径不存在、模型加载失败或缺少依赖时，页面会禁用聊天并显示具体原因。不要把本地模型路径或这些环境变量放到网页表单中。
 
 ## 供其他 Agent / Chat 客户端调用
 

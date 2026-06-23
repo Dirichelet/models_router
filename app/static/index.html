@@ -55,17 +55,16 @@
 
         <section class="app-view" data-view="models" hidden>
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">OPENAI-COMPATIBLE PROVIDERS</p><h2>模型配置</h2><p class="panel-copy">Base URL 必须以 <code>/v1</code> 结尾。输入地址和 API Key 后可读取 Provider 模型列表并模糊搜索选择。脱敏模型、路由模型均可不配置；本地 GGUF 模型只通过后端环境变量加载，不在网页录入。</p></div><button id="reset-model-form" class="ghost" type="button">新建配置</button></div>
+            <div class="panel-heading"><div><p class="eyebrow">OPENAI-COMPATIBLE PROVIDERS</p><h2>模型配置</h2><p class="panel-copy">Base URL 必须以 <code>/v1</code> 结尾。输入地址和 API Key 后可读取 Provider 模型列表并模糊搜索选择。脱敏仅使用服务器本地模型，不会调用 Provider；此处只配置路由模型和目标模型。</p></div><button id="reset-model-form" class="ghost" type="button">新建配置</button></div>
             <form id="model-form" class="model-form">
               <input id="model-id" type="hidden">
               <label>显示名称<input id="model-name" required maxlength="80" placeholder="例如：低成本通用模型"></label>
-              <label>用途<select id="model-role" required><option value="redactor">脱敏模型</option><option value="router">路由模型</option><option value="target">目标模型</option></select></label>
+              <label>用途<select id="model-role" required><option value="router">路由模型</option><option value="target">目标模型</option></select></label>
               <label class="wide">Base URL<input id="model-base-url" required type="url" maxlength="500" placeholder="https://provider.example/v1"><span class="field-hint">填写 `/v1`，不要填写 `/chat/completions`。</span></label>
               <label>API Key<input id="model-api-key" type="password" maxlength="1000" placeholder="编辑时留空以保留当前密钥"></label>
               <div class="wide provider-picker" id="provider-picker">
-                <div class="picker-heading"><label>Provider 模型<input id="model-provider-name" required maxlength="200" placeholder="点击此处自动加载并选择模型；也可手动输入 model ID"></label><span id="model-selection-count" class="selection-count">未选择</span></div>
-                <label>模糊搜索模型<input id="model-fuzzy-search" maxlength="200" placeholder="点击此处自动加载；输入名称、厂商或任意字符筛选"></label>
-                <div id="provider-model-status" class="field-hint" role="status">填写 Base URL 和 API Key 后，点击此区域会自动加载模型列表。</div>
+                <div class="picker-heading"><label>Provider 模型 / 搜索<input id="model-provider-name" required maxlength="200" placeholder="点击自动加载；输入名称或厂商即可模糊筛选，也可手动输入 model ID"></label><span id="model-selection-count" class="selection-count">未选择</span></div>
+                <div id="provider-model-status" class="field-hint" role="status">填写 Base URL 和 API Key 后，点击输入框即可自动加载模型列表。</div>
                 <div id="provider-model-options" class="provider-model-options" aria-live="polite"></div>
               </div>
               <label>输入单价 / 百万 token (USD)<input id="model-input-price" type="number" min="0" step="0.000001" value="0"></label>
@@ -79,8 +78,9 @@
 
         <section class="app-view" data-view="rules" hidden>
           <article class="panel policy-panel">
-            <div class="panel-heading"><div><p class="eyebrow">POLICY</p><h2>脱敏与路由提示词</h2><p class="panel-copy">推荐规则包含敏感信息类别、保留原则、路由决策顺序和受限 JSON 输出格式。可按业务场景调整。</p></div><button id="restore-default-rules" class="ghost" type="button">恢复推荐规则</button></div>
-            <form id="rules-form" class="stacked-form"><label>脱敏 Markdown 规则<textarea id="redaction-rule" maxlength="12000" required></textarea></label><label>路由 Markdown 规则<textarea id="routing-rule" maxlength="12000" required></textarea></label><button class="primary" type="submit">保存规则</button></form>
+            <div class="panel-heading"><div><p class="eyebrow">POLICY</p><h2>本地脱敏与路由规则</h2><p class="panel-copy">脱敏使用服务器本地 Regex、Privacy Filter 和可选中文 NER，不调用 Provider。关键词规则会在模型识别前执行；路由 Markdown 仅供配置的路由模型使用。</p></div><button id="restore-default-rules" class="ghost" type="button">恢复推荐规则</button></div>
+            <form id="rules-form" class="stacked-form"><label>本地脱敏说明（仅供审阅；实际规则在下方关键词与后端环境变量中配置）<textarea id="redaction-rule" maxlength="12000" required readonly></textarea></label><label>路由 Markdown 规则<textarea id="routing-rule" maxlength="12000" required></textarea></label><button class="primary" type="submit">保存路由规则</button></form>
+            <section class="keyword-rules" aria-labelledby="keyword-rules-title"><div class="panel-heading"><div><p class="eyebrow">LOCAL REDACTION</p><h3 id="keyword-rules-title">关键词规则</h3><p class="panel-copy">命中后会替换为指定占位符。“模糊匹配”忽略大小写、空格、句点、下划线和连字符。</p></div></div><form id="keyword-rule-form" class="model-form"><label>关键词<input id="keyword-phrase" maxlength="200" required placeholder="例如：项目天狼星"></label><label>替换文本<input id="keyword-replacement" maxlength="80" required value="[KEYWORD]" placeholder="例如：[PROJECT]"></label><label class="toggle"><input id="keyword-fuzzy" type="checkbox"> 模糊匹配</label><button class="primary" type="submit">添加关键词规则</button></form><div id="keyword-rules-list" class="keyword-rules-list"></div></section>
           </article>
         </section>
 

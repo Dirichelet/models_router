@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -30,6 +31,12 @@ from .config import Settings
 from .database import DEFAULT_RULES, Database
 from .local_models import LocalModelOptions, local_chat_completion, local_runtime_error
 from .provider import Completion, ProviderError, Usage, available_models as fetch_provider_models, chat_completion
+from .redaction import (
+    KeywordRule as RedactionKeywordRule,
+    LocalRedactorOptions,
+    local_redact,
+    local_redactor_runtime_error,
+)
 from .security import PasswordHasher, SecretBox, new_token, token_hash
 
 
@@ -149,7 +156,7 @@ def normalize_openai_v1_base_url(value: str) -> str:
 
 class ModelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    role: Literal["redactor", "router", "target"]
+    role: Literal["router", "target"]
     base_url: str = Field(min_length=8, max_length=500)
     api_key: str = Field(min_length=1, max_length=1000)
     model_name: str = Field(min_length=1, max_length=200)
@@ -165,7 +172,7 @@ class ModelCreate(BaseModel):
 
 class ModelUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
-    role: Literal["redactor", "router", "target"] | None = None
+    role: Literal["router", "target"] | None = None
     base_url: str | None = Field(default=None, min_length=8, max_length=500)
     api_key: str | None = Field(default=None, max_length=1000)
     model_name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -198,6 +205,20 @@ class ProviderModelsRequest(BaseModel):
 class RulesUpdate(BaseModel):
     redaction: str = Field(min_length=1, max_length=12_000)
     routing: str = Field(min_length=1, max_length=12_000)
+
+
+class KeywordRuleCreate(BaseModel):
+    phrase: str = Field(min_length=1, max_length=200)
+    replacement: str = Field(default="[KEYWORD]", min_length=1, max_length=80)
+    is_fuzzy: bool = False
+    is_active: bool = True
+
+
+class KeywordRuleUpdate(BaseModel):
+    phrase: str | None = Field(default=None, min_length=1, max_length=200)
+    replacement: str | None = Field(default=None, min_length=1, max_length=80)
+    is_fuzzy: bool | None = None
+    is_active: bool | None = None
 
 
 class ChatHistoryMessage(BaseModel):
@@ -383,7 +404,23 @@ def _rules() -> dict[str, str]:
     return {row["name"]: row["content"] for row in rows}
 
 
-def _local_options(path: Path) -> LocalModelOptions:
+def _keyword_rules(user_id: int) -> tuple[RedactionKeywordRule, ...]:
+    with database.connection() as connection:
+        rows = connection.execute(
+            "SELECT phrase, replacement, is_fuzzy FROM keyword_rules WHERE user_id = ? AND is_active = 1 ORDER BY length(phrase) DESC, id ASC",
+            (user_id,),
+        ).fetchall()
+    return tuple(
+        RedactionKeywordRule(
+            phrase=row["phrase"],
+            replacement=row["replacement"],
+            fuzzy=bool(row["is_fuzzy"]),
+        )
+        for row in rows
+    )
+
+
+def _local_classifier_options(path: Path) -> LocalModelOptions:
     return LocalModelOptions(
         path=path,
         chat_format=settings.local_gguf_chat_format,
@@ -393,8 +430,23 @@ def _local_options(path: Path) -> LocalModelOptions:
     )
 
 
-def _local_model_label(path: Path) -> str:
+def _local_classifier_label(path: Path) -> str:
     return f"本地 GGUF：{path.name}"
+
+
+def _local_redactor_options() -> LocalRedactorOptions:
+    if not settings.local_redactor_model_path:
+        raise RuntimeError("Local redactor is not configured")
+    return LocalRedactorOptions(
+        privacy_filter_path=settings.local_redactor_model_path,
+        chinese_ner_path=settings.local_chinese_ner_model_path,
+        device=settings.local_redactor_device,
+        min_score=settings.local_redactor_min_score,
+    )
+
+
+def _local_redactor_label(path: Path) -> str:
+    return f"本地 Transformers：{path.name}"
 
 
 def _active_pipeline() -> tuple[sqlite3.Row | None, sqlite3.Row | None, list[sqlite3.Row]]:
@@ -408,8 +460,9 @@ def _active_pipeline() -> tuple[sqlite3.Row | None, sqlite3.Row | None, list[sql
         targets = connection.execute(
             "SELECT * FROM models WHERE role = 'target' AND is_active = 1 ORDER BY id ASC"
         ).fetchall()
-    if settings.local_redactor_model_path:
-        redactor = None
+    # Redaction is deliberately never delegated to a Provider. Legacy rows remain
+    # visible for migration but cannot enter the request pipeline.
+    redactor = None
     if settings.local_classifier_model_path:
         router = None
     if not targets:
@@ -417,7 +470,9 @@ def _active_pipeline() -> tuple[sqlite3.Row | None, sqlite3.Row | None, list[sql
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Configure at least one active target model first",
         )
-    if (settings.local_redactor_model_path or settings.local_classifier_model_path) and (runtime_error := local_runtime_error()):
+    if settings.local_redactor_model_path and (runtime_error := local_redactor_runtime_error()):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=runtime_error)
+    if settings.local_classifier_model_path and (runtime_error := local_runtime_error()):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=runtime_error)
     invalid_required_models = []
     for model in (redactor, router):
@@ -456,8 +511,7 @@ def _pipeline_status() -> dict[str, Any]:
             "SELECT name, api_key_encrypted FROM models WHERE role = 'router' AND is_active = 1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
         targets = connection.execute("SELECT name, api_key_encrypted FROM models WHERE role = 'target' AND is_active = 1").fetchall()
-    if settings.local_redactor_model_path:
-        redactor = None
+    redactor = None
     if settings.local_classifier_model_path:
         router = None
     invalid_required_credentials = []
@@ -476,23 +530,24 @@ def _pipeline_status() -> dict[str, Any]:
             invalid_targets.append(model["name"])
     invalid_credentials = [*invalid_required_credentials, *invalid_targets]
     available_targets = len(targets) - len(invalid_targets)
-    runtime_error = (
-        local_runtime_error()
-        if settings.local_redactor_model_path or settings.local_classifier_model_path
-        else None
-    )
+    runtime_errors = []
+    if settings.local_redactor_model_path and (error := local_redactor_runtime_error()):
+        runtime_errors.append(error)
+    if settings.local_classifier_model_path and (error := local_runtime_error()):
+        runtime_errors.append(error)
+    runtime_error = "; ".join(runtime_errors) or None
     return {
         "redactor": (
-            _local_model_label(settings.local_redactor_model_path)
+            _local_redactor_label(settings.local_redactor_model_path)
             if settings.local_redactor_model_path
-            else redactor["name"] if redactor else None
+            else None
         ),
         "router": (
-            _local_model_label(settings.local_classifier_model_path)
+            _local_classifier_label(settings.local_classifier_model_path)
             if settings.local_classifier_model_path
             else router["name"] if router else None
         ),
-        "redaction_mode": "local" if settings.local_redactor_model_path else "provider" if redactor else "disabled",
+        "redaction_mode": "local" if settings.local_redactor_model_path else "disabled",
         "routing_mode": "local" if settings.local_classifier_model_path else "provider" if router else "default",
         "active_targets": len(targets),
         "available_targets": available_targets,
@@ -816,9 +871,14 @@ async def saved_model_available_models(
     _: Annotated[dict[str, Any], Depends(csrf_user)],
 ) -> dict[str, list[str]]:
     with database.connection() as connection:
-        model = connection.execute("SELECT base_url, api_key_encrypted FROM models WHERE id = ?", (model_id,)).fetchone()
+        model = connection.execute("SELECT role, base_url, api_key_encrypted FROM models WHERE id = ?", (model_id,)).fetchone()
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    if model["role"] == "redactor":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provider redactors are disabled; configure LOCAL_REDACTOR_MODEL_PATH on the server instead",
+        )
     try:
         return {"models": await fetch_provider_models(base_url=model["base_url"], api_key=secret_box.decrypt(model["api_key_encrypted"]))}
     except (ProviderError, ValueError) as exc:
@@ -832,7 +892,7 @@ def create_model(
 ) -> dict[str, Any]:
     now = utc_text()
     with database.connection() as connection:
-        if model.is_active and model.role in {"redactor", "router"}:
+        if model.is_active and model.role == "router":
             connection.execute("UPDATE models SET is_active = 0, updated_at = ? WHERE role = ?", (now, model.role))
         try:
             cursor = connection.execute(
@@ -900,7 +960,7 @@ def update_model(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
         effective_role = data.get("role", current["role"])
         effective_active = data.get("is_active", bool(current["is_active"]))
-        if effective_active and effective_role in {"redactor", "router"}:
+        if effective_active and effective_role == "router":
             connection.execute(
                 "UPDATE models SET is_active = 0, updated_at = ? WHERE role = ? AND id != ?",
                 (utc_text(), effective_role, model_id),
@@ -945,6 +1005,11 @@ async def test_model_connection(
         model = connection.execute("SELECT * FROM models WHERE id = ?", (model_id,)).fetchone()
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    if model["role"] == "redactor":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provider redactors are disabled; configure LOCAL_REDACTOR_MODEL_PATH on the server instead",
+        )
     call_names = {
         "redactor_name": model["name"] if model["role"] == "redactor" else None,
         "router_name": model["name"] if model["role"] == "router" else None,
@@ -1008,6 +1073,90 @@ def update_rules(rules: RulesUpdate, _: Annotated[dict[str, Any], Depends(csrf_u
                 (name, content.strip(), now),
             )
     return _rules()
+
+
+def _serialise_keyword_rule(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["is_fuzzy"] = bool(result["is_fuzzy"])
+    result["is_active"] = bool(result["is_active"])
+    return result
+
+
+@app.get("/api/keyword-rules")
+def list_keyword_rules(user: Annotated[dict[str, Any], Depends(current_user)]) -> list[dict[str, Any]]:
+    with database.connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM keyword_rules WHERE user_id = ? ORDER BY is_active DESC, length(phrase) DESC, id ASC",
+            (user["id"],),
+        ).fetchall()
+    return [_serialise_keyword_rule(row) for row in rows]
+
+
+@app.post("/api/keyword-rules", status_code=status.HTTP_201_CREATED)
+def create_keyword_rule(
+    rule: KeywordRuleCreate,
+    user: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> dict[str, Any]:
+    phrase, replacement = rule.phrase.strip(), rule.replacement.strip()
+    if not phrase or not replacement:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Keyword phrase and replacement cannot be blank")
+    now = utc_text()
+    with database.connection() as connection:
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO keyword_rules(user_id, phrase, replacement, is_fuzzy, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user["id"], phrase, replacement, int(rule.is_fuzzy), int(rule.is_active), now, now),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This keyword already exists") from exc
+        row = connection.execute("SELECT * FROM keyword_rules WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _serialise_keyword_rule(row)
+
+
+@app.put("/api/keyword-rules/{rule_id}")
+def update_keyword_rule(
+    rule_id: int,
+    update: KeywordRuleUpdate,
+    user: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> dict[str, Any]:
+    data = update.model_dump(exclude_unset=True)
+    with database.connection() as connection:
+        current = connection.execute("SELECT * FROM keyword_rules WHERE id = ? AND user_id = ?", (rule_id, user["id"])).fetchone()
+        if not current:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword rule not found")
+        assignments: list[str] = []
+        values: list[Any] = []
+        for field in ("phrase", "replacement", "is_fuzzy", "is_active"):
+            if field not in data:
+                continue
+            value = data[field]
+            if field in {"phrase", "replacement"}:
+                value = value.strip()
+                if not value:
+                    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field} cannot be blank")
+            assignments.append(f"{field} = ?")
+            values.append(value)
+        if not assignments:
+            return _serialise_keyword_rule(current)
+        assignments.append("updated_at = ?")
+        values.extend((utc_text(), rule_id, user["id"]))
+        try:
+            connection.execute(f"UPDATE keyword_rules SET {', '.join(assignments)} WHERE id = ? AND user_id = ?", values)
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This keyword already exists") from exc
+        row = connection.execute("SELECT * FROM keyword_rules WHERE id = ?", (rule_id,)).fetchone()
+    return _serialise_keyword_rule(row)
+
+
+@app.delete("/api/keyword-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_keyword_rule(rule_id: int, user: Annotated[dict[str, Any], Depends(csrf_user)]) -> Response:
+    with database.connection() as connection:
+        if connection.execute("DELETE FROM keyword_rules WHERE id = ? AND user_id = ?", (rule_id, user["id"])).rowcount == 0:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword rule not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/api/calls")
@@ -1083,17 +1232,18 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message cannot be empty")
     redactor, router, targets = _active_pipeline()
     rules = _rules()
+    keyword_rules = _keyword_rules(user["id"])
     conversation = _conversation_input(message, payload.context)
     redacted: str | None = None
     redaction_verified = False
-    redaction_applied = bool(redactor or settings.local_redactor_model_path)
+    redaction_applied = bool(settings.local_redactor_model_path)
     redactor_name = (
-        _local_model_label(settings.local_redactor_model_path)
+        _local_redactor_label(settings.local_redactor_model_path)
         if settings.local_redactor_model_path
-        else redactor["name"] if redactor else None
+        else None
     )
     router_name = (
-        _local_model_label(settings.local_classifier_model_path)
+        _local_classifier_label(settings.local_classifier_model_path)
         if settings.local_classifier_model_path
         else router["name"] if router else "内置难度/费率路由"
     )
@@ -1105,31 +1255,8 @@ async def chat(
     cost_known = True
 
     try:
-        if redactor:
-            redaction = await _invoke(
-                redactor,
-                [
-                    {"role": "system", "content": rules["redaction"]},
-                    {"role": "user", "content": conversation},
-                ],
-                temperature=0,
-            )
-            redacted = redaction.content
-            prompt_tokens += redaction.usage.prompt_tokens
-            completion_tokens += redaction.usage.completion_tokens
-            total_cost += _cost(redactor, redaction.usage)
-            cost_known = cost_known and redaction.usage.reported
-        elif settings.local_redactor_model_path:
-            redaction = await local_chat_completion(
-                _local_options(settings.local_redactor_model_path),
-                [
-                    {"role": "system", "content": rules["redaction"]},
-                    {"role": "user", "content": conversation},
-                ],
-                temperature=0,
-            )
-            redacted = redaction.content
-            cost_known = False
+        if settings.local_redactor_model_path:
+            redacted = (await asyncio.to_thread(local_redact, _local_redactor_options(), conversation, keyword_rules)).text
         else:
             redacted = conversation
 
@@ -1170,11 +1297,10 @@ async def chat(
             selected, routing_reason = _choose_target(routing.content, targets)
         elif settings.local_classifier_model_path:
             routing = await local_chat_completion(
-                _local_options(settings.local_classifier_model_path),
+                _local_classifier_options(settings.local_classifier_model_path),
                 [{"role": "system", "content": router_system}, {"role": "user", "content": redacted}],
                 temperature=0,
             )
-            cost_known = False
             selected, routing_reason = _choose_target(routing.content, targets)
         else:
             selected, routing_reason = _default_choose_target(redacted, targets)
