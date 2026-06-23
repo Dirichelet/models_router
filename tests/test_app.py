@@ -279,7 +279,10 @@ def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
             "redactor": None,
             "router": None,
             "active_targets": 0,
+            "available_targets": 0,
             "invalid_credentials": [],
+            "invalid_required_credentials": [],
+            "invalid_targets": [],
             "ready": False,
         }
         for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
@@ -289,6 +292,7 @@ def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
         assert status["redactor"] == "redactor"
         assert status["router"] == "router"
         assert status["active_targets"] == 1
+        assert status["available_targets"] == 1
         assert status["invalid_credentials"] == []
 
 
@@ -314,9 +318,47 @@ def test_models_with_a_changed_fernet_key_are_marked_for_reentry(monkeypatch) ->
         pipeline = test_client.get("/api/pipeline/status").json()
         assert pipeline["ready"] is False
         assert pipeline["invalid_credentials"] == ["redactor", "router", "target"]
+        assert pipeline["invalid_required_credentials"] == ["redactor", "router"]
+        assert pipeline["invalid_targets"] == ["target"]
         response = test_client.post("/api/chat", headers=headers, json={"message": "Hello"})
         assert response.status_code == 422
         assert "Re-enter the API Key" in response.json()["detail"]
+
+
+def test_pipeline_skips_target_models_with_unreadable_credentials(monkeypatch) -> None:
+    completions = iter(
+        (
+            Completion("Question for [PERSON].", Usage(10, 5)),
+            Completion('{"model_id": 4, "reason": "Available target."}', Usage(10, 5)),
+            Completion("Safe answer.", Usage(10, 5)),
+        )
+    )
+
+    async def fake_completion(**_kwargs):
+        return next(completions)
+
+    monkeypatch.setattr(application, "chat_completion", fake_completion)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        assert test_client.post("/api/models", headers=headers, json=model_payload("redactor", "redactor")).status_code == 201
+        assert test_client.post("/api/models", headers=headers, json=model_payload("router", "router")).status_code == 201
+        stale = test_client.post("/api/models", headers=headers, json=model_payload("stale-target", "target"))
+        usable = test_client.post("/api/models", headers=headers, json=model_payload("usable-target", "target"))
+        assert stale.status_code == 201
+        assert usable.status_code == 201
+        with application.database.connection() as connection:
+            connection.execute("UPDATE models SET api_key_encrypted = ? WHERE id = ?", ("unreadable", stale.json()["id"]))
+
+        pipeline = test_client.get("/api/pipeline/status").json()
+        assert pipeline["ready"] is True
+        assert pipeline["active_targets"] == 2
+        assert pipeline["available_targets"] == 1
+        assert pipeline["invalid_required_credentials"] == []
+        assert pipeline["invalid_targets"] == ["stale-target"]
+
+        response = test_client.post("/api/chat", headers=headers, json={"message": "Question for Alice"})
+        assert response.status_code == 200, response.text
+        assert response.json()["selected_model"] == "usable-target"
 
 
 def test_audit_records_and_statistics_are_scoped_to_the_current_user() -> None:
@@ -499,7 +541,7 @@ def test_openai_compatible_service_api_routes_agent_messages(monkeypatch) -> Non
         payload = response.json()
         assert payload["object"] == "chat.completion"
         assert payload["choices"][0]["message"] == {"role": "assistant", "content": "Agent-compatible answer."}
-        assert payload["usage"]["total_tokens"] == 30
+        assert payload["usage"]["total_tokens"] == 45
         assert "[SYSTEM]\nUse concise answers." in provider_requests[0]["messages"][1]["content"]
         assert "[TOOL]\nLookup result: reference data" in provider_requests[0]["messages"][1]["content"]
 

@@ -57,19 +57,25 @@ function renderEvaluation(evaluation) {
 function renderPipelineStatus(pipeline) {
   const pill = $("#pipeline-status");
   const submit = $("#chat-submit");
-  if (pipeline.invalid_credentials?.length) {
-    pill.textContent = `需重填 API Key：${pipeline.invalid_credentials.join("、")}`;
+  if (pipeline.invalid_required_credentials?.length) {
+    pill.textContent = `需重填 API Key：${pipeline.invalid_required_credentials.join("、")}`;
     pill.classList.add("warning");
     submit.disabled = true;
     return;
   }
   if (pipeline.ready) {
-    pill.textContent = `已就绪：${pipeline.redactor} → ${pipeline.router} → ${pipeline.active_targets} 个目标`;
-    pill.classList.remove("warning");
+    const skipped = pipeline.invalid_targets?.length || 0;
+    const targetLabel = `${pipeline.available_targets ?? pipeline.active_targets} 个目标`;
+    pill.textContent = skipped
+      ? `已就绪：${pipeline.redactor} → ${pipeline.router} → ${targetLabel}（已跳过 ${skipped} 个需重填 Key 的目标）`
+      : `已就绪：${pipeline.redactor} → ${pipeline.router} → ${targetLabel}`;
+    pill.classList.toggle("warning", Boolean(skipped));
     submit.disabled = false;
   } else {
-    const missing = [!pipeline.redactor && "脱敏模型", !pipeline.router && "路由模型", !pipeline.active_targets && "目标模型"].filter(Boolean).join("、");
-    pill.textContent = `缺少：${missing}`;
+    const missing = [!pipeline.redactor && "脱敏模型", !pipeline.router && "路由模型", !pipeline.available_targets && "可用目标模型"].filter(Boolean).join("、");
+    pill.textContent = pipeline.invalid_targets?.length
+      ? `需重填至少一个目标模型 API Key：${pipeline.invalid_targets.join("、")}`
+      : `缺少：${missing}`;
     pill.classList.add("warning");
     submit.disabled = true;
   }

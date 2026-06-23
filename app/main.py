@@ -392,18 +392,30 @@ def _active_pipeline() -> tuple[sqlite3.Row, sqlite3.Row, list[sqlite3.Row]]:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Configure one active redactor, one active router, and at least one active target model first",
         )
-    invalid_models = []
-    for model in [redactor, router, *targets]:
+    invalid_required_models = []
+    for model in (redactor, router):
         try:
             secret_box.decrypt(model["api_key_encrypted"])
         except ValueError:
-            invalid_models.append(model["name"])
-    if invalid_models:
+            invalid_required_models.append(model["name"])
+    if invalid_required_models:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Re-enter the API Key for: {', '.join(invalid_models)}",
+            detail=f"Re-enter the API Key for: {', '.join(invalid_required_models)}",
         )
-    return redactor, router, targets
+    available_targets = []
+    for model in targets:
+        try:
+            secret_box.decrypt(model["api_key_encrypted"])
+            available_targets.append(model)
+        except ValueError:
+            continue
+    if not available_targets:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Re-enter the API Key for at least one active target model",
+        )
+    return redactor, router, available_targets
 
 
 def _pipeline_status() -> dict[str, Any]:
@@ -415,19 +427,31 @@ def _pipeline_status() -> dict[str, Any]:
             "SELECT name, api_key_encrypted FROM models WHERE role = 'router' AND is_active = 1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
         targets = connection.execute("SELECT name, api_key_encrypted FROM models WHERE role = 'target' AND is_active = 1").fetchall()
-    active_models = [model for model in (redactor, router) if model] + list(targets)
-    invalid_credentials = []
-    for model in active_models:
+    invalid_required_credentials = []
+    for model in (redactor, router):
+        if not model:
+            continue
         try:
             secret_box.decrypt(model["api_key_encrypted"])
         except ValueError:
-            invalid_credentials.append(model["name"])
+            invalid_required_credentials.append(model["name"])
+    invalid_targets = []
+    for model in targets:
+        try:
+            secret_box.decrypt(model["api_key_encrypted"])
+        except ValueError:
+            invalid_targets.append(model["name"])
+    invalid_credentials = [*invalid_required_credentials, *invalid_targets]
+    available_targets = len(targets) - len(invalid_targets)
     return {
         "redactor": redactor["name"] if redactor else None,
         "router": router["name"] if router else None,
         "active_targets": len(targets),
+        "available_targets": available_targets,
         "invalid_credentials": invalid_credentials,
-        "ready": bool(redactor and router and targets and not invalid_credentials),
+        "invalid_required_credentials": invalid_required_credentials,
+        "invalid_targets": invalid_targets,
+        "ready": bool(redactor and router and available_targets and not invalid_required_credentials),
     }
 
 
