@@ -23,6 +23,10 @@
             密码
             <input id="auth-password" name="password" type="password" minlength="12" maxlength="256" required autocomplete="current-password">
           </label>
+          <label id="bootstrap-token-field" hidden>
+            启动令牌
+            <input id="bootstrap-token" name="bootstrap-token" type="password" maxlength="512" autocomplete="off">
+          </label>
           <button id="auth-submit" class="primary" type="submit">登录</button>
         </form>
         <p id="auth-message" class="form-message" role="status"></p>

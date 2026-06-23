@@ -4,7 +4,7 @@
 
 ## 运行
 
-1. 复制环境变量模板并设置公网域名、ACME 邮箱和新的 `FERNET_KEY`：
+1. 复制环境变量模板并设置公网域名、ACME 邮箱、新的 `FERNET_KEY` 与随机 `BOOTSTRAP_TOKEN`：
 
    ```bash
    cp .env.example .env
@@ -16,7 +16,7 @@
    docker compose up --build -d
    ```
 
-3. 打开 `https://<CADDY_DOMAIN>`，在网页中创建唯一的初始管理员账户；随后在网页中录入脱敏模型、路由模型、目标模型及规则。
+3. 打开 `https://<CADDY_DOMAIN>`，在网页中输入 `BOOTSTRAP_TOKEN` 创建唯一的初始管理员账户；随后在网页中录入脱敏模型、路由模型、目标模型及规则。首个账户创建后该令牌不再可用于注册，但应继续作为部署密钥保留。
 
 模型 API Key 使用 `FERNET_KEY` 加密后才写入 SQLite。原始用户消息不会存入调用记录；记录中仅保留脱敏后的消息。不要提交 `.env`、数据库卷或任何真实 Provider 密钥。
 

@@ -103,6 +103,10 @@ class Credentials(BaseModel):
     password: str = Field(min_length=12, max_length=256)
 
 
+class BootstrapCredentials(Credentials):
+    bootstrap_token: str = Field(default="", max_length=512)
+
+
 class PasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=12, max_length=256)
@@ -382,11 +386,13 @@ def health() -> dict[str, str]:
 def auth_state() -> dict[str, bool]:
     with database.connection() as connection:
         has_user = connection.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
-    return {"bootstrap_required": not has_user}
+    return {"bootstrap_required": not has_user, "bootstrap_token_required": bool(settings.bootstrap_token)}
 
 
 @app.post("/api/auth/bootstrap", status_code=status.HTTP_201_CREATED)
-def bootstrap(credentials: Credentials, response: Response) -> dict[str, Any]:
+def bootstrap(credentials: BootstrapCredentials, response: Response) -> dict[str, Any]:
+    if settings.bootstrap_token and not hmac.compare_digest(credentials.bootstrap_token, settings.bootstrap_token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid bootstrap token")
     with database.connection() as connection:
         if connection.execute("SELECT 1 FROM users LIMIT 1").fetchone():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Initial account already exists")

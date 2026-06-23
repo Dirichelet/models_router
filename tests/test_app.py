@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -179,3 +180,17 @@ def test_model_connection_test_is_audited(monkeypatch) -> None:
         audit = test_client.get("/api/calls").json()
         assert audit[0]["kind"] == "connection_test"
         assert audit[0]["selected_model_name"] == "target"
+
+
+def test_bootstrap_token_protects_the_first_public_account(monkeypatch) -> None:
+    monkeypatch.setattr(application, "settings", replace(application.settings, bootstrap_token="a-very-long-bootstrap-token-123"))
+    with client() as test_client:
+        state = test_client.get("/api/auth/state").json()
+        assert state["bootstrap_token_required"] is True
+        rejected = test_client.post("/api/auth/bootstrap", json={"username": "admin", "password": "a-secure-password"})
+        assert rejected.status_code == 403
+        accepted = test_client.post(
+            "/api/auth/bootstrap",
+            json={"username": "admin", "password": "a-secure-password", "bootstrap_token": "a-very-long-bootstrap-token-123"},
+        )
+        assert accepted.status_code == 201

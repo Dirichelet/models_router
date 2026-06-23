@@ -132,6 +132,8 @@ async function initialise() {
   } catch (_) {
     const auth = await api("/api/auth/state");
     $("#auth-copy").textContent = auth.bootstrap_required ? "创建唯一的初始管理员账户。密码至少 12 位。" : "使用管理员账户登录。";
+    $("#bootstrap-token-field").hidden = !auth.bootstrap_required || !auth.bootstrap_token_required;
+    $("#bootstrap-token").required = Boolean(auth.bootstrap_required && auth.bootstrap_token_required);
     $("#auth-submit").textContent = auth.bootstrap_required ? "创建账户并进入控制台" : "登录";
     $("#auth-form").dataset.mode = auth.bootstrap_required ? "bootstrap" : "login";
     showAuth();
@@ -143,8 +145,11 @@ $("#auth-form").addEventListener("submit", async (event) => {
   const button = $("#auth-submit"); button.disabled = true;
   $("#auth-message").textContent = "";
   try {
-    const body = JSON.stringify({ username: $("#auth-username").value.trim(), password: $("#auth-password").value });
-    const route = event.currentTarget.dataset.mode === "bootstrap" ? "/api/auth/bootstrap" : "/api/auth/login";
+    const isBootstrap = event.currentTarget.dataset.mode === "bootstrap";
+    const request = { username: $("#auth-username").value.trim(), password: $("#auth-password").value };
+    if (isBootstrap) request.bootstrap_token = $("#bootstrap-token").value;
+    const body = JSON.stringify(request);
+    const route = isBootstrap ? "/api/auth/bootstrap" : "/api/auth/login";
     const result = await api(route, { method: "POST", body });
     state.csrfToken = result.csrf_token;
     showApp(result);

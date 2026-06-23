@@ -18,6 +18,7 @@ class Settings:
     app_env: str
     database_path: Path
     fernet_key: str
+    bootstrap_token: str
     cookie_secure: bool
     trusted_hosts: list[str]
     session_hours: int
@@ -32,6 +33,9 @@ class Settings:
                 "FERNET_KEY is required. Generate one with: "
                 "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
             )
+        bootstrap_token = os.getenv("BOOTSTRAP_TOKEN", "").strip()
+        if app_env == "production" and (len(bootstrap_token) < 24 or bootstrap_token.startswith("replace-")):
+            raise RuntimeError("A random BOOTSTRAP_TOKEN of at least 24 characters is required in production")
 
         raw_hosts = os.getenv("TRUSTED_HOSTS", "localhost,127.0.0.1,testserver")
         trusted_hosts = [host.strip() for host in raw_hosts.split(",") if host.strip()]
@@ -42,6 +46,7 @@ class Settings:
             app_env=app_env,
             database_path=Path(os.getenv("DATABASE_PATH", "./data/models_router.db")),
             fernet_key=fernet_key,
+            bootstrap_token=bootstrap_token,
             cookie_secure=_as_bool(os.getenv("COOKIE_SECURE"), app_env == "production"),
             trusted_hosts=trusted_hosts,
             session_hours=int(os.getenv("SESSION_HOURS", "12")),
