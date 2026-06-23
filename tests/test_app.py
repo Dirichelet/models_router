@@ -229,3 +229,28 @@ def test_short_weak_password_is_rejected_but_long_passphrase_is_accepted() -> No
             "/api/auth/bootstrap", json={"username": "admin", "password": "correct horse battery staple"}
         )
         assert strong.status_code == 201
+
+
+def test_invalid_router_choice_falls_back_and_is_exposed_in_evaluation(monkeypatch) -> None:
+    completions = iter(
+        (
+            Completion("Question for [PERSON].", Usage(10, 5)),
+            Completion("I cannot choose a model today.", Usage(10, 5)),
+            Completion("Fallback answer.", Usage(10, 5)),
+        )
+    )
+
+    async def invalid_router(**_kwargs):
+        return next(completions)
+
+    monkeypatch.setattr(application, "chat_completion", invalid_router)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        assert test_client.post("/api/models", headers=headers, json=model_payload("redactor", "redactor")).status_code == 201
+        assert test_client.post("/api/models", headers=headers, json=model_payload("router", "router")).status_code == 201
+        assert test_client.post("/api/models", headers=headers, json=model_payload("target", "target")).status_code == 201
+        response = test_client.post("/api/chat", headers=headers, json={"message": "Question for Alice"})
+        assert response.status_code == 200
+        assert response.json()["routing_reason"].startswith("Router response was invalid")
+        evaluation = test_client.get("/api/evaluation").json()
+        assert evaluation["routing_fallbacks"] == 1
