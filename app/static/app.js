@@ -234,4 +234,12 @@ $("#chat-form").addEventListener("submit", async (event) => {
 });
 
 $("#refresh-calls").addEventListener("click", () => refreshCalls().catch((error) => setMessage(error.message)));
+$("#clear-calls").addEventListener("click", async () => {
+  if (!confirm("永久清除全部调用记录与已记录的消费？此操作不可撤销。")) return;
+  try {
+    const result = await api("/api/calls", { method: "DELETE" });
+    await refreshCalls();
+    setMessage(`已清除 ${result.deleted_count} 条调用记录。`, "success");
+  } catch (error) { setMessage(error.message); }
+});
 initialise().catch((error) => { $("#auth-copy").textContent = `无法启动：${error.message}`; });

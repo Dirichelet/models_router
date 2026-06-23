@@ -194,3 +194,19 @@ def test_bootstrap_token_protects_the_first_public_account(monkeypatch) -> None:
             json={"username": "admin", "password": "a-secure-password", "bootstrap_token": "a-very-long-bootstrap-token-123"},
         )
         assert accepted.status_code == 201
+
+
+def test_audit_records_can_be_deleted_from_the_protected_api(monkeypatch) -> None:
+    async def test_completion(**_kwargs):
+        return Completion("connection-ok", Usage(4, 2))
+
+    monkeypatch.setattr(application, "chat_completion", test_completion)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        model = test_client.post("/api/models", headers=headers, json=model_payload("target", "target"))
+        assert test_client.post(f"/api/models/{model.json()['id']}/test", headers=headers).status_code == 200
+        assert len(test_client.get("/api/calls").json()) == 1
+        cleared = test_client.delete("/api/calls", headers=headers)
+        assert cleared.status_code == 200
+        assert cleared.json() == {"deleted_count": 1}
+        assert test_client.get("/api/calls").json() == []

@@ -631,6 +631,13 @@ def list_calls(
     return [dict(row) for row in rows]
 
 
+@app.delete("/api/calls")
+def clear_calls(_: Annotated[dict[str, Any], Depends(csrf_user)]) -> dict[str, int]:
+    with database.connection() as connection:
+        deleted_count = connection.execute("DELETE FROM calls").rowcount
+    return {"deleted_count": deleted_count}
+
+
 @app.get("/api/stats")
 def stats(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]:
     with database.connection() as connection:
