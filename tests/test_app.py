@@ -112,3 +112,30 @@ def test_privacy_guard_stops_a_leaky_redactor_before_routing_or_target(monkeypat
         assert audit[0]["status"] == "failed"
         assert audit[0]["redacted_message"] is None
         assert original_message not in str(audit)
+
+
+def test_missing_provider_usage_is_not_reported_as_actual_cost(monkeypatch) -> None:
+    completions = iter(
+        (
+            Completion("Question about [PERSON].", Usage(0, 0, reported=False)),
+            Completion('{"model_id": 3, "reason": "Suitable."}', Usage(10, 5)),
+            Completion("Answer.", Usage(10, 5)),
+        )
+    )
+
+    async def missing_usage(**_kwargs):
+        return next(completions)
+
+    monkeypatch.setattr(application, "chat_completion", missing_usage)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
+            assert test_client.post("/api/models", headers=headers, json=model_payload(name, role)).status_code == 201
+        response = test_client.post("/api/chat", headers=headers, json={"message": "Question for Alice"})
+        assert response.status_code == 200, response.text
+        assert response.json()["cost_known"] is False
+
+        audit = test_client.get("/api/calls").json()
+        assert audit[0]["cost_known"] == 0
+        stats = test_client.get("/api/stats").json()
+        assert stats["unknown_cost_calls"] == 1

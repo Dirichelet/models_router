@@ -16,6 +16,7 @@ class ProviderError(RuntimeError):
 class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reported: bool = True
 
 
 @dataclass(frozen=True)
@@ -59,10 +60,13 @@ async def chat_completion(
         content = payload["choices"][0]["message"]["content"]
         if not isinstance(content, str) or not content.strip():
             raise ValueError("empty completion")
-        raw_usage = payload.get("usage") or {}
+        raw_usage = payload.get("usage")
+        has_complete_usage = isinstance(raw_usage, dict) and "prompt_tokens" in raw_usage and "completion_tokens" in raw_usage
+        raw_usage = raw_usage if isinstance(raw_usage, dict) else {}
         usage = Usage(
             prompt_tokens=int(raw_usage.get("prompt_tokens") or 0),
             completion_tokens=int(raw_usage.get("completion_tokens") or 0),
+            reported=has_complete_usage,
         )
         return Completion(content=content.strip(), usage=usage)
     except (KeyError, IndexError, TypeError, ValueError) as exc:

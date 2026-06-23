@@ -334,6 +334,7 @@ def _record_call(
     prompt_tokens: int,
     completion_tokens: int,
     total_cost: float,
+    cost_known: bool,
     status_name: str,
     error_message: str | None = None,
 ) -> int:
@@ -342,12 +343,12 @@ def _record_call(
             """
             INSERT INTO calls(
                 created_at, user_id, redactor_model_name, router_model_name, selected_model_name,
-                redacted_message, routing_reason, prompt_tokens, completion_tokens, total_cost, status, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                redacted_message, routing_reason, prompt_tokens, completion_tokens, total_cost, cost_known, status, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 utc_text(), user_id, redactor_name, router_name, target_name, redacted_message,
-                routing_reason, prompt_tokens, completion_tokens, total_cost, status_name, error_message,
+                routing_reason, prompt_tokens, completion_tokens, total_cost, int(cost_known), status_name, error_message,
             ),
         )
         return int(cursor.lastrowid)
@@ -536,6 +537,7 @@ def list_calls(
             """
             SELECT id, created_at, redactor_model_name, router_model_name, selected_model_name,
                    redacted_message, routing_reason, prompt_tokens, completion_tokens, total_cost, status, error_message
+                   , cost_known
             FROM calls ORDER BY id DESC LIMIT ?
             """,
             (limit,),
@@ -550,7 +552,8 @@ def stats(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]
             """
             SELECT COUNT(*) AS total_calls,
                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS successful_calls,
-                   COALESCE(SUM(total_cost), 0) AS total_cost
+                   COALESCE(SUM(CASE WHEN cost_known = 1 THEN total_cost ELSE 0 END), 0) AS total_cost,
+                   SUM(CASE WHEN cost_known = 0 THEN 1 ELSE 0 END) AS unknown_cost_calls
             FROM calls
             """
         ).fetchone()
@@ -574,6 +577,7 @@ async def chat(
     prompt_tokens = 0
     completion_tokens = 0
     total_cost = 0.0
+    cost_known = True
 
     try:
         redaction = await _invoke(
@@ -588,6 +592,7 @@ async def chat(
         prompt_tokens += redaction.usage.prompt_tokens
         completion_tokens += redaction.usage.completion_tokens
         total_cost += _cost(redactor, redaction.usage)
+        cost_known = cost_known and redaction.usage.reported
         leaked_values = _leaked_sensitive_values(message, redacted)
         if leaked_values:
             raise PrivacyVerificationError(
@@ -619,6 +624,7 @@ async def chat(
         prompt_tokens += routing.usage.prompt_tokens
         completion_tokens += routing.usage.completion_tokens
         total_cost += _cost(router, routing.usage)
+        cost_known = cost_known and routing.usage.reported
         selected, routing_reason = _choose_target(routing.content, targets)
 
         answer = await _invoke(
@@ -634,11 +640,12 @@ async def chat(
         prompt_tokens += answer.usage.prompt_tokens
         completion_tokens += answer.usage.completion_tokens
         total_cost += _cost(selected, answer.usage)
+        cost_known = cost_known and answer.usage.reported
         total_cost = round(total_cost, 8)
         call_id = _record_call(
             user_id=user["id"], redactor_name=redactor["name"], router_name=router["name"], target_name=selected["name"],
             redacted_message=redacted, routing_reason=routing_reason, prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens, total_cost=total_cost, status_name="succeeded",
+            completion_tokens=completion_tokens, total_cost=total_cost, cost_known=cost_known, status_name="succeeded",
         )
         return {
             "call_id": call_id,
@@ -649,6 +656,7 @@ async def chat(
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_cost": total_cost,
+            "cost_known": cost_known,
         }
     except (ProviderError, ValueError) as exc:
         safe_error = str(exc)[:300]
@@ -657,7 +665,7 @@ async def chat(
             target_name=selected["name"] if selected else None,
             redacted_message=redacted if redaction_verified else None,
             routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            total_cost=round(total_cost, 8), status_name="failed", error_message=safe_error,
+            total_cost=round(total_cost, 8), cost_known=cost_known, status_name="failed", error_message=safe_error,
         )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=safe_error) from exc
     except Exception as exc:  # Keep implementation failures out of the client response and audit payload.
@@ -667,6 +675,6 @@ async def chat(
             target_name=selected["name"] if selected else None,
             redacted_message=redacted if redaction_verified else None,
             routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            total_cost=round(total_cost, 8), status_name="failed", error_message="Unexpected pipeline failure",
+            total_cost=round(total_cost, 8), cost_known=cost_known, status_name="failed", error_message="Unexpected pipeline failure",
         )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected pipeline failure") from exc

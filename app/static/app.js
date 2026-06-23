@@ -45,6 +45,7 @@ async function loadDashboard() {
   $("#metric-calls").textContent = stats.total_calls || 0;
   $("#metric-success").textContent = stats.successful_calls || 0;
   $("#metric-cost").textContent = `$${Number(stats.total_cost || 0).toFixed(6)}`;
+  $("#metric-cost-note").textContent = stats.unknown_cost_calls ? `${stats.unknown_cost_calls} 条调用未返回完整 usage` : "";
 }
 
 function renderModels() {
@@ -67,7 +68,7 @@ function renderCalls(calls) {
   table.innerHTML = calls.map((call) => `
     <tr><td>${escapeHtml(new Date(call.created_at).toLocaleString())}</td><td>${escapeHtml(call.selected_model_name || "—")}</td>
     <td title="${escapeHtml(call.redacted_message || call.error_message || "")}">${escapeHtml((call.redacted_message || call.error_message || "—").slice(0, 180))}</td>
-    <td>$${Number(call.total_cost || 0).toFixed(6)}<br><span class="muted">${call.prompt_tokens + call.completion_tokens} tokens</span></td>
+    <td>${call.cost_known ? `$${Number(call.total_cost || 0).toFixed(6)}` : "待 Provider 确认"}<br><span class="muted">${call.prompt_tokens + call.completion_tokens} tokens</span></td>
     <td class="status-${escapeHtml(call.status)}">${escapeHtml(call.status)}</td></tr>`).join("");
 }
 
@@ -109,7 +110,8 @@ function appendChat(kind, content) {
 function appendPipeline(result) {
   const item = document.createElement("div");
   item.className = "pipeline-detail";
-  item.innerHTML = `<div><b>脱敏后：</b>${escapeHtml(result.redacted_message)}</div><div><b>路由：</b>${escapeHtml(result.selected_model)} — ${escapeHtml(result.routing_reason)}</div><div><b>消费：</b>$${Number(result.total_cost).toFixed(6)} · ${result.prompt_tokens + result.completion_tokens} tokens</div>`;
+  const cost = result.cost_known ? `$${Number(result.total_cost).toFixed(6)}` : "待 Provider 返回完整 usage";
+  item.innerHTML = `<div><b>脱敏后：</b>${escapeHtml(result.redacted_message)}</div><div><b>路由：</b>${escapeHtml(result.selected_model)} — ${escapeHtml(result.routing_reason)}</div><div><b>消费：</b>${cost} · ${result.prompt_tokens + result.completion_tokens} tokens</div>`;
   $("#chat-output").append(item);
 }
 
@@ -119,6 +121,7 @@ async function refreshCalls() {
   $("#metric-calls").textContent = stats.total_calls || 0;
   $("#metric-success").textContent = stats.successful_calls || 0;
   $("#metric-cost").textContent = `$${Number(stats.total_cost || 0).toFixed(6)}`;
+  $("#metric-cost-note").textContent = stats.unknown_cost_calls ? `${stats.unknown_cost_calls} 条调用未返回完整 usage` : "";
 }
 
 async function initialise() {
