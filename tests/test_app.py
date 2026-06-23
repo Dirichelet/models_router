@@ -20,6 +20,7 @@ os.environ["TRUSTED_HOSTS"] = "testserver"
 os.environ["HF_HOME"] = "/tmp/models-router-test-huggingface"
 
 from app import main as application  # noqa: E402
+from app import redaction as local_redaction  # noqa: E402
 from app.provider import Completion, Usage  # noqa: E402
 from app.provider import ProviderError, chat_completion  # noqa: E402
 from app.database import DEFAULT_RULES  # noqa: E402
@@ -368,6 +369,34 @@ def test_local_regex_and_fuzzy_keyword_rules_mask_chinese_sensitive_text() -> No
     )
     assert keyword_count == 1
     assert keyword_redacted == "[PROJECT] 正在上线"
+
+
+def test_local_redactor_uses_only_a_validated_local_path_without_duplicate_local_files_flag(monkeypatch, tmp_path) -> None:
+    import transformers
+    import transformers.pipelines
+
+    model_directory = tmp_path / "privacy-filter"
+    model_directory.mkdir()
+    captured = []
+
+    def fake_pipeline(**kwargs):
+        captured.append(kwargs)
+        return lambda _text: []
+
+    monkeypatch.setattr(transformers, "pipeline", fake_pipeline)
+    monkeypatch.setattr(transformers.pipelines, "pipeline", fake_pipeline)
+    monkeypatch.setattr(local_redaction, "_pipeline_device", lambda _device: (-1, {"dtype": "float32"}))
+    local_redaction.LocalPIIRedactor(
+        local_redaction.LocalRedactorOptions(
+            privacy_filter_path=model_directory,
+            chinese_ner_path=None,
+            device="cpu",
+            min_score=0.5,
+        )
+    )
+    assert captured[0]["model"] == str(model_directory)
+    assert captured[0]["tokenizer"] == str(model_directory)
+    assert "local_files_only" not in captured[0]["model_kwargs"]
 
 
 def test_keyword_rules_are_scoped_to_the_user_and_passed_to_local_redaction(monkeypatch) -> None:

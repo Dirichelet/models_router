@@ -151,11 +151,11 @@ def _pipeline_device(device: str) -> tuple[int, dict[str, Any]]:
     except ImportError as exc:  # Defensive; the caller normally checks this first.
         raise LocalRedactionError("torch is unavailable") from exc
     if device == "cpu":
-        return -1, {"torch_dtype": torch.float32}
+        return -1, {"dtype": torch.float32}
     matched = re.fullmatch(r"cuda(?::(\d+))?", device)
     if not matched or not torch.cuda.is_available():
         raise LocalRedactionError("LOCAL_REDACTOR_DEVICE must be cpu or an available cuda[:index] device")
-    return int(matched.group(1) or 0), {"torch_dtype": torch.float16}
+    return int(matched.group(1) or 0), {"dtype": torch.float16}
 
 
 class LocalPIIRedactor:
@@ -165,6 +165,10 @@ class LocalPIIRedactor:
         runtime_error = local_redactor_runtime_error()
         if runtime_error:
             raise LocalRedactionError(runtime_error)
+        if not options.privacy_filter_path.is_dir():
+            raise LocalRedactionError("LOCAL_REDACTOR_MODEL_PATH must be an existing local model directory")
+        if options.chinese_ner_path and not options.chinese_ner_path.is_dir():
+            raise LocalRedactionError("LOCAL_CHINESE_NER_MODEL_PATH must be an existing local model directory")
         try:
             from transformers import pipeline
 
@@ -173,7 +177,10 @@ class LocalPIIRedactor:
                 "task": "token-classification",
                 "device": device,
                 "aggregation_strategy": "simple",
-                "model_kwargs": {"local_files_only": True, **model_kwargs},
+                # `model` and `tokenizer` are validated local directories. Passing
+                # local_files_only here duplicates Transformers' own local-path
+                # handling in recent releases and raises a TypeError.
+                "model_kwargs": model_kwargs,
             }
             self._privacy_filter = pipeline(model=str(options.privacy_filter_path), tokenizer=str(options.privacy_filter_path), **common)
             self._chinese_ner = (
