@@ -32,7 +32,7 @@ uv run python main.py
 
 ### 可选：从后端环境变量加载本地脱敏/分类模型
 
-本地模型不在网页上传或配置，避免将模型路径和运行参数暴露给浏览器。脱敏使用 `transformers` 本地目录，并强制 `local_files_only=True`：运行期不会下载模型或发送内容到 Provider。链路为 Regex（手机号、身份证、邮箱、密钥、IP 等）→ `openai/privacy-filter` → 可选中文 NER。模型目录须在启动前已下载到服务器。
+本地模型不在网页上传或配置，避免将模型路径和运行参数暴露给浏览器。脱敏使用 `transformers` 本地目录，并强制 `local_files_only=True`：运行期不会下载模型或发送内容到 Provider。链路为 Regex（手机号、身份证、邮箱、密钥、IP 等）→ `openai/privacy-filter` → 可选中文 NER。若服务器已有官方 Hugging Face 缓存（`models--openai--privacy-filter`），会自动发现并启用；否则通过环境变量指定已下载目录。
 
 ```bash
 export LOCAL_REDACTOR_MODEL_PATH=/absolute/path/openai-privacy-filter

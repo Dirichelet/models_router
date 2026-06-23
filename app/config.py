@@ -35,6 +35,29 @@ def _optional_model_directory(variable: str) -> Path | None:
     return path.resolve()
 
 
+def _cached_privacy_filter_directory() -> Path | None:
+    """Use an already-downloaded official model snapshot when no path is set."""
+    hub_cache = os.getenv("HF_HUB_CACHE", "").strip()
+    if hub_cache:
+        hub_path = Path(hub_cache).expanduser()
+    else:
+        hf_home = os.getenv("HF_HOME", "").strip()
+        hub_path = Path(hf_home).expanduser() / "hub" if hf_home else Path.home() / ".cache" / "huggingface" / "hub"
+    repository = hub_path / "models--openai--privacy-filter"
+    reference = repository / "refs" / "main"
+    if reference.is_file():
+        revision = reference.read_text(encoding="utf-8").strip()
+        snapshot = repository / "snapshots" / revision
+        if snapshot.is_dir():
+            return snapshot.resolve()
+    snapshots = repository / "snapshots"
+    if snapshots.is_dir():
+        available = sorted((path for path in snapshots.iterdir() if path.is_dir()), key=lambda path: path.stat().st_mtime, reverse=True)
+        if available:
+            return available[0].resolve()
+    return None
+
+
 def _score_threshold(variable: str, default: float) -> float:
     value = float(os.getenv(variable, str(default)))
     if not 0 <= value <= 1:
@@ -100,7 +123,7 @@ class Settings:
             trusted_hosts=trusted_hosts,
             session_hours=int(os.getenv("SESSION_HOURS", "12")),
             max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "20000")),
-            local_redactor_model_path=_optional_model_directory("LOCAL_REDACTOR_MODEL_PATH"),
+            local_redactor_model_path=_optional_model_directory("LOCAL_REDACTOR_MODEL_PATH") or _cached_privacy_filter_directory(),
             local_chinese_ner_model_path=_optional_model_directory("LOCAL_CHINESE_NER_MODEL_PATH"),
             local_redactor_device=os.getenv("LOCAL_REDACTOR_DEVICE", "cpu").strip().lower(),
             local_redactor_min_score=_score_threshold("LOCAL_REDACTOR_MIN_SCORE", 0.5),

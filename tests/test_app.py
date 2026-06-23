@@ -17,6 +17,7 @@ os.environ["COOKIE_SECURE"] = "false"
 os.environ["DATABASE_PATH"] = str(TEST_DATABASE)
 os.environ["FERNET_KEY"] = Fernet.generate_key().decode()
 os.environ["TRUSTED_HOSTS"] = "testserver"
+os.environ["HF_HOME"] = "/tmp/models-router-test-huggingface"
 
 from app import main as application  # noqa: E402
 from app.provider import Completion, Usage  # noqa: E402
@@ -459,6 +460,20 @@ def test_local_gguf_paths_are_loaded_only_from_environment(monkeypatch, tmp_path
     settings = Settings.from_environment()
     assert settings.local_redactor_model_path == redactor.resolve()
     assert settings.local_classifier_model_path == classifier.resolve()
+
+
+def test_cached_privacy_filter_is_used_when_no_redactor_path_is_set(monkeypatch, tmp_path) -> None:
+    hub_cache = tmp_path / "hub"
+    revision = "test-revision"
+    snapshot = hub_cache / "models--openai--privacy-filter" / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    reference = hub_cache / "models--openai--privacy-filter" / "refs"
+    reference.mkdir(parents=True)
+    (reference / "main").write_text(revision, encoding="utf-8")
+    monkeypatch.delenv("LOCAL_REDACTOR_MODEL_PATH", raising=False)
+    monkeypatch.setenv("HF_HUB_CACHE", str(hub_cache))
+    settings = Settings.from_environment()
+    assert settings.local_redactor_model_path == snapshot.resolve()
 
 
 def test_local_redactor_and_classifier_override_web_roles(monkeypatch, tmp_path) -> None:
