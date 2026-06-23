@@ -28,6 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import Settings
 from .database import DEFAULT_RULES, Database
+from .local_models import LocalModelOptions, local_chat_completion, local_runtime_error
 from .provider import Completion, ProviderError, Usage, available_models as fetch_provider_models, chat_completion
 from .security import PasswordHasher, SecretBox, new_token, token_hash
 
@@ -199,8 +200,14 @@ class RulesUpdate(BaseModel):
     routing: str = Field(min_length=1, max_length=12_000)
 
 
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=20_000)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20_000)
+    context: list[ChatHistoryMessage] = Field(default_factory=list, max_length=16)
 
 
 class OpenAIMessage(BaseModel):
@@ -376,7 +383,21 @@ def _rules() -> dict[str, str]:
     return {row["name"]: row["content"] for row in rows}
 
 
-def _active_pipeline() -> tuple[sqlite3.Row, sqlite3.Row, list[sqlite3.Row]]:
+def _local_options(path: Path) -> LocalModelOptions:
+    return LocalModelOptions(
+        path=path,
+        chat_format=settings.local_gguf_chat_format,
+        context_tokens=settings.local_gguf_context_tokens,
+        gpu_layers=settings.local_gguf_gpu_layers,
+        threads=settings.local_gguf_threads,
+    )
+
+
+def _local_model_label(path: Path) -> str:
+    return f"本地 GGUF：{path.name}"
+
+
+def _active_pipeline() -> tuple[sqlite3.Row | None, sqlite3.Row | None, list[sqlite3.Row]]:
     with database.connection() as connection:
         redactor = connection.execute(
             "SELECT * FROM models WHERE role = 'redactor' AND is_active = 1 ORDER BY id DESC LIMIT 1"
@@ -387,13 +408,21 @@ def _active_pipeline() -> tuple[sqlite3.Row, sqlite3.Row, list[sqlite3.Row]]:
         targets = connection.execute(
             "SELECT * FROM models WHERE role = 'target' AND is_active = 1 ORDER BY id ASC"
         ).fetchall()
-    if not redactor or not router or not targets:
+    if settings.local_redactor_model_path:
+        redactor = None
+    if settings.local_classifier_model_path:
+        router = None
+    if not targets:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Configure one active redactor, one active router, and at least one active target model first",
+            detail="Configure at least one active target model first",
         )
+    if (settings.local_redactor_model_path or settings.local_classifier_model_path) and (runtime_error := local_runtime_error()):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=runtime_error)
     invalid_required_models = []
     for model in (redactor, router):
+        if not model:
+            continue
         try:
             secret_box.decrypt(model["api_key_encrypted"])
         except ValueError:
@@ -427,6 +456,10 @@ def _pipeline_status() -> dict[str, Any]:
             "SELECT name, api_key_encrypted FROM models WHERE role = 'router' AND is_active = 1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
         targets = connection.execute("SELECT name, api_key_encrypted FROM models WHERE role = 'target' AND is_active = 1").fetchall()
+    if settings.local_redactor_model_path:
+        redactor = None
+    if settings.local_classifier_model_path:
+        router = None
     invalid_required_credentials = []
     for model in (redactor, router):
         if not model:
@@ -443,15 +476,31 @@ def _pipeline_status() -> dict[str, Any]:
             invalid_targets.append(model["name"])
     invalid_credentials = [*invalid_required_credentials, *invalid_targets]
     available_targets = len(targets) - len(invalid_targets)
+    runtime_error = (
+        local_runtime_error()
+        if settings.local_redactor_model_path or settings.local_classifier_model_path
+        else None
+    )
     return {
-        "redactor": redactor["name"] if redactor else None,
-        "router": router["name"] if router else None,
+        "redactor": (
+            _local_model_label(settings.local_redactor_model_path)
+            if settings.local_redactor_model_path
+            else redactor["name"] if redactor else None
+        ),
+        "router": (
+            _local_model_label(settings.local_classifier_model_path)
+            if settings.local_classifier_model_path
+            else router["name"] if router else None
+        ),
+        "redaction_mode": "local" if settings.local_redactor_model_path else "provider" if redactor else "disabled",
+        "routing_mode": "local" if settings.local_classifier_model_path else "provider" if router else "default",
         "active_targets": len(targets),
         "available_targets": available_targets,
         "invalid_credentials": invalid_credentials,
         "invalid_required_credentials": invalid_required_credentials,
         "invalid_targets": invalid_targets,
-        "ready": bool(redactor and router and available_targets and not invalid_required_credentials),
+        "local_runtime_error": runtime_error,
+        "ready": bool(available_targets and not invalid_required_credentials and not runtime_error),
     }
 
 
@@ -521,6 +570,49 @@ def _choose_target(router_answer: str, targets: list[sqlite3.Row]) -> tuple[sqli
         return selected, "Router response was invalid; selected the lowest configured price target."
     reason = str(candidate.get("reason") or "Selected by routing model.")[:500]
     return selected, reason
+
+
+def _default_choose_target(message: str, targets: list[sqlite3.Row]) -> tuple[sqlite3.Row, str]:
+    """Choose a cost tier deterministically when no classifier model is configured.
+
+    A provider's price is not a quality guarantee, but it is the only comparable
+    signal available without a classifier. The default therefore uses the
+    cheapest tier for simple work, the middle tier for medium work, and the
+    highest-priced tier for complex work.
+    """
+    normalized = message.casefold()
+    complexity_terms = (
+        "推理", "证明", "架构", "调试", "分析", "比较", "优化", "算法", "复杂", "多步骤",
+        "implement", "debug", "reasoning", "architecture", "algorithm", "analy", "compare", "optimiz",
+    )
+    score = sum(term in normalized for term in complexity_terms)
+    if len(message) > 800:
+        score += 1
+    if len(message) > 2_500:
+        score += 1
+    if "```" in message:
+        score += 1
+    ordered = sorted(
+        targets,
+        key=lambda target: (
+            float(target["input_price_per_million"]) + float(target["output_price_per_million"]),
+            target["id"],
+        ),
+    )
+    if score >= 3:
+        return ordered[-1], "默认难度/费率路由：复杂任务，选择最高费率候选模型。"
+    if score >= 1:
+        return ordered[len(ordered) // 2], "默认难度/费率路由：中等任务，选择中间费率候选模型。"
+    return ordered[0], "默认难度/费率路由：简单任务，选择最低费率候选模型。"
+
+
+def _conversation_input(message: str, context: list[ChatHistoryMessage]) -> str:
+    """Keep browser chat context in the request only; it is never persisted raw."""
+    if not context:
+        return message
+    turns = [f"[{turn.role.upper()}]\n{turn.content.strip()}" for turn in context]
+    turns.append(f"[USER]\n{message}")
+    return "\n\n".join(turns)
 
 
 def _record_call(
@@ -991,8 +1083,20 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message cannot be empty")
     redactor, router, targets = _active_pipeline()
     rules = _rules()
+    conversation = _conversation_input(message, payload.context)
     redacted: str | None = None
     redaction_verified = False
+    redaction_applied = bool(redactor or settings.local_redactor_model_path)
+    redactor_name = (
+        _local_model_label(settings.local_redactor_model_path)
+        if settings.local_redactor_model_path
+        else redactor["name"] if redactor else None
+    )
+    router_name = (
+        _local_model_label(settings.local_classifier_model_path)
+        if settings.local_classifier_model_path
+        else router["name"] if router else "内置难度/费率路由"
+    )
     selected: sqlite3.Row | None = None
     routing_reason: str | None = None
     prompt_tokens = 0
@@ -1001,25 +1105,41 @@ async def chat(
     cost_known = True
 
     try:
-        redaction = await _invoke(
-            redactor,
-            [
-                {"role": "system", "content": rules["redaction"]},
-                {"role": "user", "content": message},
-            ],
-            temperature=0,
-        )
-        redacted = redaction.content
-        prompt_tokens += redaction.usage.prompt_tokens
-        completion_tokens += redaction.usage.completion_tokens
-        total_cost += _cost(redactor, redaction.usage)
-        cost_known = cost_known and redaction.usage.reported
-        leaked_values = _leaked_sensitive_values(message, redacted)
-        if leaked_values:
-            raise PrivacyVerificationError(
-                "Automated de-identification check blocked sensitive content before routing or target inference"
+        if redactor:
+            redaction = await _invoke(
+                redactor,
+                [
+                    {"role": "system", "content": rules["redaction"]},
+                    {"role": "user", "content": conversation},
+                ],
+                temperature=0,
             )
-        redaction_verified = True
+            redacted = redaction.content
+            prompt_tokens += redaction.usage.prompt_tokens
+            completion_tokens += redaction.usage.completion_tokens
+            total_cost += _cost(redactor, redaction.usage)
+            cost_known = cost_known and redaction.usage.reported
+        elif settings.local_redactor_model_path:
+            redaction = await local_chat_completion(
+                _local_options(settings.local_redactor_model_path),
+                [
+                    {"role": "system", "content": rules["redaction"]},
+                    {"role": "user", "content": conversation},
+                ],
+                temperature=0,
+            )
+            redacted = redaction.content
+            cost_known = False
+        else:
+            redacted = conversation
+
+        if redaction_applied:
+            leaked_values = _leaked_sensitive_values(conversation, redacted)
+            if leaked_values:
+                raise PrivacyVerificationError(
+                    "Automated de-identification check blocked sensitive content before routing or target inference"
+                )
+            redaction_verified = True
 
         candidates = [
             {
@@ -1033,27 +1153,43 @@ async def chat(
         ]
         router_system = (
             f"{rules['routing']}\n\n"
-            "Select exactly one candidate for the redacted user message. Reply only with JSON in this shape: "
+            "Select exactly one candidate for the processed conversation. Reply only with JSON in this shape: "
             '{"model_id": 123, "reason": "brief explanation"}.\n\n'
             f"Candidates:\n{json.dumps(candidates, ensure_ascii=False)}"
         )
-        routing = await _invoke(
-            router,
-            [{"role": "system", "content": router_system}, {"role": "user", "content": redacted}],
-            temperature=0,
-        )
-        prompt_tokens += routing.usage.prompt_tokens
-        completion_tokens += routing.usage.completion_tokens
-        total_cost += _cost(router, routing.usage)
-        cost_known = cost_known and routing.usage.reported
-        selected, routing_reason = _choose_target(routing.content, targets)
+        if router:
+            routing = await _invoke(
+                router,
+                [{"role": "system", "content": router_system}, {"role": "user", "content": redacted}],
+                temperature=0,
+            )
+            prompt_tokens += routing.usage.prompt_tokens
+            completion_tokens += routing.usage.completion_tokens
+            total_cost += _cost(router, routing.usage)
+            cost_known = cost_known and routing.usage.reported
+            selected, routing_reason = _choose_target(routing.content, targets)
+        elif settings.local_classifier_model_path:
+            routing = await local_chat_completion(
+                _local_options(settings.local_classifier_model_path),
+                [{"role": "system", "content": router_system}, {"role": "user", "content": redacted}],
+                temperature=0,
+            )
+            cost_known = False
+            selected, routing_reason = _choose_target(routing.content, targets)
+        else:
+            selected, routing_reason = _default_choose_target(redacted, targets)
 
         answer = await _invoke(
             selected,
             [
                 {
                     "role": "system",
-                    "content": "Answer the user helpfully. The supplied user message has already been redacted; never request the original sensitive data.",
+                    "content": (
+                        "Answer the user helpfully. The supplied conversation has already been redacted; "
+                        "never request the original sensitive data."
+                        if redaction_applied
+                        else "Answer the user helpfully. The supplied conversation was not redacted; do not request unnecessary sensitive data."
+                    ),
                 },
                 {"role": "user", "content": redacted},
             ],
@@ -1064,14 +1200,15 @@ async def chat(
         cost_known = cost_known and answer.usage.reported
         total_cost = round(total_cost, 8)
         call_id = _record_call(
-            user_id=user["id"], redactor_name=redactor["name"], router_name=router["name"], target_name=selected["name"],
-            redacted_message=redacted, routing_reason=routing_reason, prompt_tokens=prompt_tokens,
+            user_id=user["id"], redactor_name=redactor_name, router_name=router_name, target_name=selected["name"],
+            redacted_message=redacted if redaction_applied else None, routing_reason=routing_reason, prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens, total_cost=total_cost, cost_known=cost_known, status_name="succeeded",
         )
         return {
             "call_id": call_id,
             "answer": answer.content,
-            "redacted_message": redacted,
+            "redacted_message": redacted if redaction_applied else None,
+            "redaction_applied": redaction_applied,
             "selected_model": selected["name"],
             "routing_reason": routing_reason,
             "prompt_tokens": prompt_tokens,
@@ -1082,9 +1219,9 @@ async def chat(
     except (ProviderError, ValueError) as exc:
         safe_error = str(exc)[:300]
         _record_call(
-            user_id=user["id"], redactor_name=redactor["name"], router_name=router["name"],
+            user_id=user["id"], redactor_name=redactor_name, router_name=router_name,
             target_name=selected["name"] if selected else None,
-            redacted_message=redacted if redaction_verified else None,
+            redacted_message=redacted if redaction_verified and redaction_applied else None,
             routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             total_cost=round(total_cost, 8), cost_known=cost_known, status_name="failed", error_message=safe_error,
         )
@@ -1092,9 +1229,9 @@ async def chat(
     except Exception as exc:  # Keep implementation failures out of the client response and audit payload.
         logger.exception("Unexpected chat pipeline failure")
         _record_call(
-            user_id=user["id"], redactor_name=redactor["name"], router_name=router["name"],
+            user_id=user["id"], redactor_name=redactor_name, router_name=router_name,
             target_name=selected["name"] if selected else None,
-            redacted_message=redacted if redaction_verified else None,
+            redacted_message=redacted if redaction_verified and redaction_applied else None,
             routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             total_cost=round(total_cost, 8), cost_known=cost_known, status_name="failed", error_message="Unexpected pipeline failure",
         )

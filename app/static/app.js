@@ -1,4 +1,4 @@
-const state = { csrfToken: null, models: [], providerModels: [], selectedProviderModels: new Set(), providerModelsLoading: false };
+const state = { csrfToken: null, models: [], providerModels: [], selectedProviderModels: new Set(), providerModelsLoading: false, chatHistory: [] };
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char]);
@@ -32,6 +32,7 @@ function showAuth() {
   $("#app-shell").hidden = true;
   $("#auth-panel").hidden = false;
   state.csrfToken = null;
+  state.chatHistory = [];
 }
 
 function showApp(user) {
@@ -57,6 +58,12 @@ function renderEvaluation(evaluation) {
 function renderPipelineStatus(pipeline) {
   const pill = $("#pipeline-status");
   const submit = $("#chat-submit");
+  if (pipeline.local_runtime_error) {
+    pill.textContent = pipeline.local_runtime_error;
+    pill.classList.add("warning");
+    submit.disabled = true;
+    return;
+  }
   if (pipeline.invalid_required_credentials?.length) {
     pill.textContent = `需重填 API Key：${pipeline.invalid_required_credentials.join("、")}`;
     pill.classList.add("warning");
@@ -66,13 +73,15 @@ function renderPipelineStatus(pipeline) {
   if (pipeline.ready) {
     const skipped = pipeline.invalid_targets?.length || 0;
     const targetLabel = `${pipeline.available_targets ?? pipeline.active_targets} 个目标`;
+    const redactorLabel = pipeline.redactor || "不脱敏";
+    const routerLabel = pipeline.router || "默认难度/费率路由";
     pill.textContent = skipped
-      ? `已就绪：${pipeline.redactor} → ${pipeline.router} → ${targetLabel}（已跳过 ${skipped} 个需重填 Key 的目标）`
-      : `已就绪：${pipeline.redactor} → ${pipeline.router} → ${targetLabel}`;
+      ? `已就绪：${redactorLabel} → ${routerLabel} → ${targetLabel}（已跳过 ${skipped} 个需重填 Key 的目标）`
+      : `已就绪：${redactorLabel} → ${routerLabel} → ${targetLabel}`;
     pill.classList.toggle("warning", Boolean(skipped));
     submit.disabled = false;
   } else {
-    const missing = [!pipeline.redactor && "脱敏模型", !pipeline.router && "路由模型", !pipeline.available_targets && "可用目标模型"].filter(Boolean).join("、");
+    const missing = [!pipeline.available_targets && "可用目标模型"].filter(Boolean).join("、");
     pill.textContent = pipeline.invalid_targets?.length
       ? `需重填至少一个目标模型 API Key：${pipeline.invalid_targets.join("、")}`
       : `缺少：${missing}`;
@@ -259,7 +268,10 @@ function appendPipeline(result) {
   const item = document.createElement("div");
   item.className = "pipeline-detail";
   const cost = result.cost_known ? `$${Number(result.total_cost).toFixed(6)}` : "待 Provider 返回完整 usage";
-  item.innerHTML = `<div><b>脱敏后：</b>${escapeHtml(result.redacted_message)}</div><div><b>路由：</b>${escapeHtml(result.selected_model)} — ${escapeHtml(result.routing_reason)}</div><div><b>消费：</b>${cost} · ${result.prompt_tokens + result.completion_tokens} tokens</div>`;
+  const redaction = result.redaction_applied
+    ? `<div><b>脱敏后：</b>${escapeHtml(result.redacted_message)}</div>`
+    : "<div><b>脱敏：</b>未启用；原文不会写入审计记录</div>";
+  item.innerHTML = `${redaction}<div><b>路由：</b>${escapeHtml(result.selected_model)} — ${escapeHtml(result.routing_reason)}</div><div><b>消费：</b>${cost} · ${result.prompt_tokens + result.completion_tokens} tokens</div>`;
   $("#chat-output").append(item);
 }
 
@@ -400,7 +412,19 @@ $("#rules-form").addEventListener("submit", async (event) => { event.preventDefa
 $("#chat-form").addEventListener("submit", async (event) => {
   event.preventDefault(); const input = $("#chat-message"), button = $("#chat-submit"), message = input.value.trim(); if (!message) return;
   appendChat("user", message); input.value = ""; button.disabled = true;
-  try { const result = await api("/api/chat", { method: "POST", body: JSON.stringify({ message }) }); appendPipeline(result); appendChat("assistant", result.answer); await refreshCalls(); } catch (error) { appendChat("assistant", `调用失败：${error.message}`); await refreshCalls(); } finally { button.disabled = false; }
+  try {
+    const context = state.chatHistory.slice(-16);
+    const result = await api("/api/chat", { method: "POST", body: JSON.stringify({ message, context }) });
+    appendPipeline(result); appendChat("assistant", result.answer);
+    state.chatHistory.push({ role: "user", content: message }, { role: "assistant", content: result.answer });
+    if (state.chatHistory.length > 16) state.chatHistory = state.chatHistory.slice(-16);
+    await refreshCalls();
+  } catch (error) { appendChat("assistant", `调用失败：${error.message}`); await refreshCalls(); } finally { button.disabled = false; }
+});
+$("#clear-chat-context").addEventListener("click", () => {
+  state.chatHistory = [];
+  $("#chat-output").innerHTML = '<div class="empty-state">上下文已清除。后续消息将作为新的对话发送。</div>';
+  setMessage("聊天上下文已清除；审计记录未改变。", "success");
 });
 $("#refresh-calls").addEventListener("click", () => refreshCalls().catch((error) => setMessage(error.message)));
 $("#clear-calls").addEventListener("click", async () => { if (!confirm("永久清除全部调用记录与已记录的消费？此操作不可撤销。")) return; try { const result = await api("/api/calls", { method: "DELETE" }); await refreshCalls(); setMessage(`已清除 ${result.deleted_count} 条调用记录。`, "success"); } catch (error) { setMessage(error.message); } });

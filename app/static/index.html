@@ -47,15 +47,15 @@
             <article class="metric-card accent"><span>已确认消费</span><strong id="metric-cost">$0.000000</strong><small id="metric-cost-note" class="muted"></small></article>
           </section>
           <article class="panel chat-panel">
-            <div class="panel-heading"><div><p class="eyebrow">PRIVATE CHAT</p><h2>发送消息</h2></div><span id="pipeline-status" class="status-pill">检查配置中…</span></div>
-            <div id="chat-output" class="chat-output" aria-live="polite"><div class="empty-state">在“模型配置”中配置脱敏模型、路由模型和至少一个目标模型后，即可开始聊天。</div></div>
+            <div class="panel-heading"><div><p class="eyebrow">PRIVATE CHAT</p><h2>发送消息</h2></div><div class="model-actions"><button id="clear-chat-context" class="ghost" type="button">清除上下文</button><span id="pipeline-status" class="status-pill">检查配置中…</span></div></div>
+            <div id="chat-output" class="chat-output" aria-live="polite"><div class="empty-state">配置至少一个目标模型后即可聊天。脱敏与路由模型均可选；未配置时分别使用不脱敏和默认难度/费率路由。</div></div>
             <form id="chat-form" class="chat-form"><label class="sr-only" for="chat-message">消息</label><textarea id="chat-message" name="message" maxlength="20000" placeholder="在此输入消息；原始消息不会写入调用记录。" required></textarea><button id="chat-submit" class="primary" type="submit">脱敏并发送</button></form>
           </article>
         </section>
 
         <section class="app-view" data-view="models" hidden>
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">OPENAI-COMPATIBLE PROVIDERS</p><h2>模型配置</h2><p class="panel-copy">Base URL 必须以 <code>/v1</code> 结尾。输入地址和 API Key 后可读取 Provider 模型列表并模糊搜索选择。</p></div><button id="reset-model-form" class="ghost" type="button">新建配置</button></div>
+            <div class="panel-heading"><div><p class="eyebrow">OPENAI-COMPATIBLE PROVIDERS</p><h2>模型配置</h2><p class="panel-copy">Base URL 必须以 <code>/v1</code> 结尾。输入地址和 API Key 后可读取 Provider 模型列表并模糊搜索选择。脱敏模型、路由模型均可不配置；本地 GGUF 模型只通过后端环境变量加载，不在网页录入。</p></div><button id="reset-model-form" class="ghost" type="button">新建配置</button></div>
             <form id="model-form" class="model-form">
               <input id="model-id" type="hidden">
               <label>显示名称<input id="model-name" required maxlength="80" placeholder="例如：低成本通用模型"></label>

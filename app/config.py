@@ -15,6 +15,16 @@ def _as_bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _optional_model_path(variable: str) -> Path | None:
+    raw_path = os.getenv(variable, "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser()
+    if not path.is_file():
+        raise RuntimeError(f"{variable} must point to an existing local GGUF model file")
+    return path.resolve()
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str
@@ -25,6 +35,12 @@ class Settings:
     trusted_hosts: list[str]
     session_hours: int
     max_message_chars: int
+    local_redactor_model_path: Path | None
+    local_classifier_model_path: Path | None
+    local_gguf_chat_format: str | None
+    local_gguf_context_tokens: int
+    local_gguf_gpu_layers: int
+    local_gguf_threads: int
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -64,4 +80,10 @@ class Settings:
             trusted_hosts=trusted_hosts,
             session_hours=int(os.getenv("SESSION_HOURS", "12")),
             max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "20000")),
+            local_redactor_model_path=_optional_model_path("LOCAL_REDACTOR_MODEL_PATH"),
+            local_classifier_model_path=_optional_model_path("LOCAL_CLASSIFIER_MODEL_PATH"),
+            local_gguf_chat_format=os.getenv("LOCAL_GGUF_CHAT_FORMAT", "").strip() or None,
+            local_gguf_context_tokens=int(os.getenv("LOCAL_GGUF_CONTEXT_TOKENS", "4096")),
+            local_gguf_gpu_layers=int(os.getenv("LOCAL_GGUF_GPU_LAYERS", "0")),
+            local_gguf_threads=int(os.getenv("LOCAL_GGUF_THREADS", "0")),
         )

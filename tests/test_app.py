@@ -27,7 +27,8 @@ from app.security import SecretBox  # noqa: E402
 
 
 def client() -> TestClient:
-    TEST_DATABASE.unlink(missing_ok=True)
+    for path in (TEST_DATABASE, Path(f"{TEST_DATABASE}-shm"), Path(f"{TEST_DATABASE}-wal")):
+        path.unlink(missing_ok=True)
     return TestClient(application.app)
 
 
@@ -278,11 +279,14 @@ def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
         assert test_client.get("/api/pipeline/status").json() == {
             "redactor": None,
             "router": None,
+            "redaction_mode": "disabled",
+            "routing_mode": "default",
             "active_targets": 0,
             "available_targets": 0,
             "invalid_credentials": [],
             "invalid_required_credentials": [],
             "invalid_targets": [],
+            "local_runtime_error": None,
             "ready": False,
         }
         for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
@@ -296,6 +300,78 @@ def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
         assert status["invalid_credentials"] == []
 
 
+def test_chat_without_redactor_or_router_uses_default_cost_route_and_never_persists_raw_message(monkeypatch) -> None:
+    requests = []
+
+    async def target_completion(**kwargs):
+        requests.append(kwargs)
+        return Completion("Default-routed answer.", Usage(10, 5))
+
+    monkeypatch.setattr(application, "chat_completion", target_completion)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        low_cost = model_payload("low-cost", "target")
+        low_cost["input_price_per_million"] = 0.1
+        low_cost["output_price_per_million"] = 0.1
+        high_cost = model_payload("high-cost", "target")
+        high_cost["input_price_per_million"] = 10.0
+        high_cost["output_price_per_million"] = 10.0
+        assert test_client.post("/api/models", headers=headers, json=low_cost).status_code == 201
+        assert test_client.post("/api/models", headers=headers, json=high_cost).status_code == 201
+
+        pipeline = test_client.get("/api/pipeline/status").json()
+        assert pipeline["ready"] is True
+        assert pipeline["redaction_mode"] == "disabled"
+        assert pipeline["routing_mode"] == "default"
+        response = test_client.post("/api/chat", headers=headers, json={"message": "What time is it?"})
+        assert response.status_code == 200, response.text
+        assert response.json()["selected_model"] == "low-cost"
+        assert response.json()["redaction_applied"] is False
+        assert response.json()["redacted_message"] is None
+        assert len(requests) == 1
+        assert requests[0]["messages"][1]["content"] == "What time is it?"
+        audit = test_client.get("/api/calls").json()[0]
+        assert audit["redacted_message"] is None
+        assert audit["redactor_model_name"] is None
+        assert audit["router_model_name"] == "内置难度/费率路由"
+
+
+def test_chat_context_is_sent_to_the_pipeline_without_persisting_raw_turns(monkeypatch) -> None:
+    requests = []
+    completions = iter(
+        (
+            Completion("[USER] Prior [QUESTION]\n\n[ASSISTANT] Prior [ANSWER]\n\n[USER] Current [PERSON] question", Usage(10, 5)),
+            Completion('{"model_id": 3, "reason": "Context requires the configured target."}', Usage(10, 5)),
+            Completion("Context-aware answer.", Usage(10, 5)),
+        )
+    )
+
+    async def pipeline_completion(**kwargs):
+        requests.append(kwargs)
+        return next(completions)
+
+    monkeypatch.setattr(application, "chat_completion", pipeline_completion)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        for name, role in (("redactor", "redactor"), ("router", "router"), ("target", "target")):
+            assert test_client.post("/api/models", headers=headers, json=model_payload(name, role)).status_code == 201
+        response = test_client.post(
+            "/api/chat",
+            headers=headers,
+            json={
+                "message": "Current Alice question",
+                "context": [
+                    {"role": "user", "content": "Previous question"},
+                    {"role": "assistant", "content": "Previous answer"},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert requests[0]["messages"][1]["content"] == "[USER]\nPrevious question\n\n[ASSISTANT]\nPrevious answer\n\n[USER]\nCurrent Alice question"
+        assert requests[2]["messages"][1]["content"] == response.json()["redacted_message"]
+        assert "Previous question" not in test_client.get("/api/calls").json()[0]["redacted_message"]
+
+
 def test_development_fernet_key_is_created_once_and_reused(monkeypatch, tmp_path) -> None:
     database_path = tmp_path / "data" / "models_router.db"
     monkeypatch.setenv("APP_ENV", "development")
@@ -305,6 +381,61 @@ def test_development_fernet_key_is_created_once_and_reused(monkeypatch, tmp_path
     second = Settings.from_environment()
     assert first.fernet_key == second.fernet_key
     assert (database_path.parent / ".dev-fernet.key").read_text(encoding="utf-8") == first.fernet_key
+
+
+def test_local_gguf_paths_are_loaded_only_from_environment(monkeypatch, tmp_path) -> None:
+    redactor = tmp_path / "redactor.gguf"
+    classifier = tmp_path / "classifier.gguf"
+    redactor.touch()
+    classifier.touch()
+    monkeypatch.setenv("LOCAL_REDACTOR_MODEL_PATH", str(redactor))
+    monkeypatch.setenv("LOCAL_CLASSIFIER_MODEL_PATH", str(classifier))
+    settings = Settings.from_environment()
+    assert settings.local_redactor_model_path == redactor.resolve()
+    assert settings.local_classifier_model_path == classifier.resolve()
+
+
+def test_local_redactor_and_classifier_override_web_roles(monkeypatch, tmp_path) -> None:
+    redactor = tmp_path / "redactor.gguf"
+    classifier = tmp_path / "classifier.gguf"
+    redactor.touch()
+    classifier.touch()
+    monkeypatch.setattr(
+        application,
+        "settings",
+        replace(
+            application.settings,
+            local_redactor_model_path=redactor,
+            local_classifier_model_path=classifier,
+        ),
+    )
+    monkeypatch.setattr(application, "local_runtime_error", lambda: None)
+    local_requests = []
+
+    async def local_completion(options, _messages, **_kwargs):
+        local_requests.append(options.path)
+        if options.path == redactor:
+            return Completion("Question for [PERSON].", Usage(reported=False))
+        return Completion('{"model_id": 1, "reason": "Local classifier selected it."}', Usage(reported=False))
+
+    async def target_completion(**_kwargs):
+        return Completion("Local pipeline answer.", Usage(10, 5))
+
+    monkeypatch.setattr(application, "local_chat_completion", local_completion)
+    monkeypatch.setattr(application, "chat_completion", target_completion)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        assert test_client.post("/api/models", headers=headers, json=model_payload("target", "target")).status_code == 201
+        pipeline = test_client.get("/api/pipeline/status").json()
+        assert pipeline["redactor"] == "本地 GGUF：redactor.gguf"
+        assert pipeline["router"] == "本地 GGUF：classifier.gguf"
+        assert pipeline["redaction_mode"] == "local"
+        assert pipeline["routing_mode"] == "local"
+        response = test_client.post("/api/chat", headers=headers, json={"message": "Question for Alice"})
+        assert response.status_code == 200, response.text
+        assert response.json()["selected_model"] == "target"
+        assert response.json()["cost_known"] is False
+        assert local_requests == [redactor, classifier]
 
 
 def test_models_with_a_changed_fernet_key_are_marked_for_reentry(monkeypatch) -> None:
