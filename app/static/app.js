@@ -58,15 +58,15 @@ function renderModels() {
     <div class="model-row">
       <div><h3>${escapeHtml(model.name)} ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"}</h3>
       <p>${escapeHtml(model.role)} · ${escapeHtml(model.model_name)} · $${Number(model.input_price_per_million).toFixed(4)}/$${Number(model.output_price_per_million).toFixed(4)} 每百万 token</p></div>
-      <div class="model-actions"><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button><button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div>
+      <div class="model-actions"><button class="ghost test-model" data-id="${model.id}" type="button">测试</button><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button><button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div>
     </div>`).join("");
 }
 
 function renderCalls(calls) {
   const table = $("#calls-table");
-  if (!calls.length) { table.innerHTML = '<tr><td colspan="5" class="muted">暂无调用记录</td></tr>'; return; }
+  if (!calls.length) { table.innerHTML = '<tr><td colspan="6" class="muted">暂无调用记录</td></tr>'; return; }
   table.innerHTML = calls.map((call) => `
-    <tr><td>${escapeHtml(new Date(call.created_at).toLocaleString())}</td><td>${escapeHtml(call.selected_model_name || "—")}</td>
+    <tr><td>${escapeHtml(new Date(call.created_at).toLocaleString())}</td><td>${call.kind === "connection_test" ? "连接测试" : "聊天"}</td><td>${escapeHtml(call.selected_model_name || call.redactor_model_name || call.router_model_name || "—")}</td>
     <td title="${escapeHtml(call.redacted_message || call.error_message || "")}">${escapeHtml((call.redacted_message || call.error_message || "—").slice(0, 180))}</td>
     <td>${call.cost_known ? `$${Number(call.total_cost || 0).toFixed(6)}` : "待 Provider 确认"}<br><span class="muted">${call.prompt_tokens + call.completion_tokens} tokens</span></td>
     <td class="status-${escapeHtml(call.status)}">${escapeHtml(call.status)}</td></tr>`).join("");
@@ -194,6 +194,15 @@ $("#models-list").addEventListener("click", async (event) => {
   const id = Number(event.target.dataset.id);
   if (!id) return;
   if (event.target.classList.contains("edit-model")) editModel(id);
+  if (event.target.classList.contains("test-model")) {
+    event.target.disabled = true;
+    try {
+      const result = await api(`/api/models/${id}/test`, { method: "POST" });
+      const cost = result.cost_known ? `$${Number(result.total_cost).toFixed(6)}` : "usage 未完整返回";
+      setMessage(`${result.model_name} 连接成功：${result.response_preview}（${cost}）`, "success");
+      await refreshCalls();
+    } catch (error) { setMessage(error.message); } finally { event.target.disabled = false; }
+  }
   if (event.target.classList.contains("delete-model") && confirm("删除此模型配置？调用历史不会删除。")) {
     try { await api(`/api/models/${id}`, { method: "DELETE" }); resetModelForm(); await loadDashboard(); setMessage("模型配置已删除。", "success"); } catch (error) { setMessage(error.message); }
   }

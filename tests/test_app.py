@@ -161,3 +161,21 @@ def test_password_change_invalidates_old_sessions_and_reissues_csrf() -> None:
         assert test_client.post(
             "/api/auth/login", json={"username": "admin", "password": "an-even-better-password"}
         ).status_code == 200
+
+
+def test_model_connection_test_is_audited(monkeypatch) -> None:
+    async def test_completion(**kwargs):
+        assert kwargs["max_tokens"] == 12
+        return Completion("connection-ok", Usage(4, 2))
+
+    monkeypatch.setattr(application, "chat_completion", test_completion)
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        model = test_client.post("/api/models", headers=headers, json=model_payload("target", "target"))
+        assert model.status_code == 201
+        result = test_client.post(f"/api/models/{model.json()['id']}/test", headers=headers)
+        assert result.status_code == 200, result.text
+        assert result.json()["response_preview"] == "connection-ok"
+        audit = test_client.get("/api/calls").json()
+        assert audit[0]["kind"] == "connection_test"
+        assert audit[0]["selected_model_name"] == "target"

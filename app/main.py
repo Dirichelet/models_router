@@ -268,13 +268,19 @@ def _active_pipeline() -> tuple[sqlite3.Row, sqlite3.Row, list[sqlite3.Row]]:
     return redactor, router, targets
 
 
-async def _invoke(model: sqlite3.Row, messages: list[dict[str, str]], temperature: float = 0.1) -> Completion:
+async def _invoke(
+    model: sqlite3.Row,
+    messages: list[dict[str, str]],
+    temperature: float = 0.1,
+    max_tokens: int | None = None,
+) -> Completion:
     return await chat_completion(
         base_url=model["base_url"],
         api_key=secret_box.decrypt(model["api_key_encrypted"]),
         model_name=model["model_name"],
         messages=messages,
         temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
@@ -343,6 +349,7 @@ def _record_call(
     total_cost: float,
     cost_known: bool,
     status_name: str,
+    kind: Literal["chat", "connection_test"] = "chat",
     error_message: str | None = None,
 ) -> int:
     with database.connection() as connection:
@@ -350,12 +357,12 @@ def _record_call(
             """
             INSERT INTO calls(
                 created_at, user_id, redactor_model_name, router_model_name, selected_model_name,
-                redacted_message, routing_reason, prompt_tokens, completion_tokens, total_cost, cost_known, status, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                redacted_message, routing_reason, prompt_tokens, completion_tokens, total_cost, cost_known, kind, status, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 utc_text(), user_id, redactor_name, router_name, target_name, redacted_message,
-                routing_reason, prompt_tokens, completion_tokens, total_cost, int(cost_known), status_name, error_message,
+                routing_reason, prompt_tokens, completion_tokens, total_cost, int(cost_known), kind, status_name, error_message,
             ),
         )
         return int(cursor.lastrowid)
@@ -530,6 +537,55 @@ def delete_model(model_id: int, _: Annotated[dict[str, Any], Depends(csrf_user)]
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@app.post("/api/models/{model_id}/test")
+async def test_model_connection(
+    model_id: int,
+    user: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> dict[str, Any]:
+    with database.connection() as connection:
+        model = connection.execute("SELECT * FROM models WHERE id = ?", (model_id,)).fetchone()
+    if not model:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    call_names = {
+        "redactor_name": model["name"] if model["role"] == "redactor" else None,
+        "router_name": model["name"] if model["role"] == "router" else None,
+        "target_name": model["name"] if model["role"] == "target" else None,
+    }
+    try:
+        completion = await _invoke(
+            model,
+            [
+                {"role": "system", "content": "You are a connectivity check. Reply exactly with: connection-ok"},
+                {"role": "user", "content": "connection-test"},
+            ],
+            temperature=0,
+            max_tokens=12,
+        )
+        call_id = _record_call(
+            user_id=user["id"], **call_names, redacted_message=None, routing_reason="Configuration connection test",
+            prompt_tokens=completion.usage.prompt_tokens, completion_tokens=completion.usage.completion_tokens,
+            total_cost=_cost(model, completion.usage), cost_known=completion.usage.reported,
+            status_name="succeeded", kind="connection_test",
+        )
+        return {
+            "call_id": call_id,
+            "model_name": model["name"],
+            "response_preview": completion.content[:120],
+            "prompt_tokens": completion.usage.prompt_tokens,
+            "completion_tokens": completion.usage.completion_tokens,
+            "total_cost": _cost(model, completion.usage),
+            "cost_known": completion.usage.reported,
+        }
+    except (ProviderError, ValueError) as exc:
+        safe_error = str(exc)[:300]
+        _record_call(
+            user_id=user["id"], **call_names, redacted_message=None, routing_reason="Configuration connection test",
+            prompt_tokens=0, completion_tokens=0, total_cost=0, cost_known=False,
+            status_name="failed", kind="connection_test", error_message=safe_error,
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=safe_error) from exc
+
+
 @app.get("/api/rules")
 def get_rules(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, str]:
     return _rules()
@@ -559,7 +615,7 @@ def list_calls(
     with database.connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, created_at, redactor_model_name, router_model_name, selected_model_name,
+            SELECT id, created_at, kind, redactor_model_name, router_model_name, selected_model_name,
                    redacted_message, routing_reason, prompt_tokens, completion_tokens, total_cost, status, error_message
                    , cost_known
             FROM calls ORDER BY id DESC LIMIT ?

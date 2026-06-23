@@ -41,13 +41,17 @@ async def chat_completion(
     model_name: str,
     messages: list[dict[str, str]],
     temperature: float = 0.1,
+    max_tokens: int | None = None,
 ) -> Completion:
+    request_body: dict[str, Any] = {"model": model_name, "messages": messages, "temperature": temperature}
+    if max_tokens is not None:
+        request_body["max_tokens"] = max_tokens
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
             response = await client.post(
                 _endpoint(base_url),
                 headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": model_name, "messages": messages, "temperature": temperature},
+                json=request_body,
             )
     except httpx.HTTPError as exc:
         raise ProviderError("Could not reach the configured model provider") from exc

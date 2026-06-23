@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS calls (
     completion_tokens INTEGER NOT NULL DEFAULT 0,
     total_cost REAL NOT NULL DEFAULT 0,
     cost_known INTEGER NOT NULL DEFAULT 1 CHECK(cost_known IN (0, 1)),
+    kind TEXT NOT NULL DEFAULT 'chat' CHECK(kind IN ('chat', 'connection_test')),
     status TEXT NOT NULL CHECK(status IN ('succeeded', 'failed')),
     error_message TEXT
 );
@@ -79,6 +80,8 @@ class Database:
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(calls)")}
             if "cost_known" not in columns:
                 connection.execute("ALTER TABLE calls ADD COLUMN cost_known INTEGER NOT NULL DEFAULT 1")
+            if "kind" not in columns:
+                connection.execute("ALTER TABLE calls ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
             connection.executemany(
                 """
                 INSERT INTO rules(name, content, updated_at) VALUES (?, ?, datetime('now'))
