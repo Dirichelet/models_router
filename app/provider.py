@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,17 @@ class Usage:
 class Completion:
     content: str
     usage: Usage
+
+
+def _trust_environment_proxy() -> bool:
+    """Allow deployments with an explicit outbound proxy to reach providers.
+
+    Provider traffic is always initiated from server-side configuration. Honour
+    standard proxy variables by default, while allowing hardened/direct-only
+    deployments to opt out with ``PROVIDER_TRUST_ENV=false``.
+    """
+    value = os.getenv("PROVIDER_TRUST_ENV", "true").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _endpoint(base_url: str) -> str:
@@ -70,9 +82,9 @@ async def chat_completion(
     if max_tokens is not None:
         request_body["max_tokens"] = max_tokens
     try:
-        # Model providers are configured explicitly per model. Do not inherit unrelated
-        # SOCKS/HTTP proxy variables from the host process.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), trust_env=False) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0), trust_env=_trust_environment_proxy()
+        ) as client:
             response = await client.post(
                 _endpoint(base_url),
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -104,7 +116,9 @@ async def chat_completion(
 async def available_models(*, base_url: str, api_key: str) -> list[str]:
     """Retrieve model IDs from an OpenAI-compatible ``/v1/models`` endpoint."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0), trust_env=_trust_environment_proxy()
+        ) as client:
             response = await client.get(
                 _models_endpoint(base_url),
                 headers={"Authorization": f"Bearer {api_key}"},

@@ -710,7 +710,7 @@ def test_provider_rate_limit_is_safe_and_includes_retry_guidance(monkeypatch) ->
         assert "not-in-error-message" not in str(error)
     else:
         raise AssertionError("Expected ProviderError")
-    assert captured["trust_env"] is False
+    assert captured["trust_env"] is True
 
 
 def test_model_picker_lists_provider_models_without_returning_credentials(monkeypatch) -> None:

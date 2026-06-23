@@ -11,6 +11,8 @@ uv sync --dev
 
 export APP_ENV=development
 export COOKIE_SECURE=false
+# 如部署环境通过 HTTP(S)_PROXY / ALL_PROXY 出网，保持默认 true
+export PROVIDER_TRUST_ENV=true
 
 uv run python main.py
 ```
@@ -60,6 +62,8 @@ uv run python main.py
 ```
 
 路径不存在、模型加载失败或缺少依赖时，页面会禁用聊天并显示具体原因。不要把本地模型路径或这些环境变量放到网页表单中。
+
+Provider 请求默认继承运行环境的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY`，以支持受限网络的正常出网；不需要代理或要求直连时设置 `PROVIDER_TRUST_ENV=false` 后重启服务。
 
 ### 脱敏评测
 
