@@ -658,7 +658,7 @@ def update_rules(rules: RulesUpdate, _: Annotated[dict[str, Any], Depends(csrf_u
 
 @app.get("/api/calls")
 def list_calls(
-    _: Annotated[dict[str, Any], Depends(current_user)],
+    user: Annotated[dict[str, Any], Depends(current_user)],
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 100))
@@ -668,22 +668,22 @@ def list_calls(
             SELECT id, created_at, kind, redactor_model_name, router_model_name, selected_model_name,
                    redacted_message, routing_reason, prompt_tokens, completion_tokens, total_cost, status, error_message
                    , cost_known
-            FROM calls ORDER BY id DESC LIMIT ?
+            FROM calls WHERE user_id = ? ORDER BY id DESC LIMIT ?
             """,
-            (limit,),
+            (user["id"], limit),
         ).fetchall()
     return [dict(row) for row in rows]
 
 
 @app.delete("/api/calls")
-def clear_calls(_: Annotated[dict[str, Any], Depends(csrf_user)]) -> dict[str, int]:
+def clear_calls(user: Annotated[dict[str, Any], Depends(csrf_user)]) -> dict[str, int]:
     with database.connection() as connection:
-        deleted_count = connection.execute("DELETE FROM calls").rowcount
+        deleted_count = connection.execute("DELETE FROM calls WHERE user_id = ?", (user["id"],)).rowcount
     return {"deleted_count": deleted_count}
 
 
 @app.get("/api/stats")
-def stats(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]:
+def stats(user: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]:
     with database.connection() as connection:
         row = connection.execute(
             """
@@ -691,14 +691,16 @@ def stats(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, Any]
                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS successful_calls,
                    COALESCE(SUM(CASE WHEN cost_known = 1 THEN total_cost ELSE 0 END), 0) AS total_cost,
                    SUM(CASE WHEN cost_known = 0 THEN 1 ELSE 0 END) AS unknown_cost_calls
-            FROM calls
+            FROM calls WHERE user_id = ?
             """
+            ,
+            (user["id"],),
         ).fetchone()
     return dict(row)
 
 
 @app.get("/api/evaluation")
-def evaluation_signals(_: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, int]:
+def evaluation_signals(user: Annotated[dict[str, Any], Depends(current_user)]) -> dict[str, int]:
     """Expose operational quality signals without claiming unlabelled semantic accuracy."""
     with database.connection() as connection:
         row = connection.execute(
@@ -709,8 +711,10 @@ def evaluation_signals(_: Annotated[dict[str, Any], Depends(current_user)]) -> d
                 SUM(CASE WHEN kind = 'chat' AND error_message LIKE 'Automated de-identification check%' THEN 1 ELSE 0 END) AS privacy_blocks,
                 SUM(CASE WHEN kind = 'chat' AND routing_reason LIKE 'Router response was invalid%' THEN 1 ELSE 0 END) AS routing_fallbacks,
                 SUM(CASE WHEN kind = 'chat' AND status = 'succeeded' AND cost_known = 1 THEN 1 ELSE 0 END) AS known_cost_chat_calls
-            FROM calls
+            FROM calls WHERE user_id = ?
             """
+            ,
+            (user["id"],),
         ).fetchone()
     return {key: int(value or 0) for key, value in dict(row).items()}
 

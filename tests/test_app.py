@@ -272,3 +272,35 @@ def test_pipeline_status_reports_missing_and_ready_model_roles() -> None:
         assert status["redactor"] == "redactor"
         assert status["router"] == "router"
         assert status["active_targets"] == 1
+
+
+def test_audit_records_and_statistics_are_scoped_to_the_current_user() -> None:
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        own_user_id = test_client.get("/api/auth/me").json()["id"]
+        with application.database.connection() as connection:
+            other_user_id = connection.execute(
+                "INSERT INTO users(username, password_hash, created_at) VALUES (?, ?, ?)",
+                ("other-user", "not-used-in-this-test", "2026-01-01T00:00:00+00:00"),
+            ).lastrowid
+        for user_id in (own_user_id, other_user_id):
+            application._record_call(
+                user_id=user_id,
+                redactor_name=None,
+                router_name=None,
+                target_name="target",
+                redacted_message="[PERSON] question",
+                routing_reason="test",
+                prompt_tokens=1,
+                completion_tokens=1,
+                total_cost=0.1,
+                cost_known=True,
+                status_name="succeeded",
+            )
+
+        assert len(test_client.get("/api/calls").json()) == 1
+        assert test_client.get("/api/stats").json()["total_calls"] == 1
+        assert test_client.delete("/api/calls", headers=headers).json() == {"deleted_count": 1}
+        with application.database.connection() as connection:
+            remaining = connection.execute("SELECT COUNT(*) AS count FROM calls WHERE user_id = ?", (other_user_id,)).fetchone()
+        assert remaining["count"] == 1
