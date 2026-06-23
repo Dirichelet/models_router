@@ -47,7 +47,9 @@ async def chat_completion(
     if max_tokens is not None:
         request_body["max_tokens"] = max_tokens
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        # Model providers are configured explicitly per model. Do not inherit unrelated
+        # SOCKS/HTTP proxy variables from the host process.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), trust_env=False) as client:
             response = await client.post(
                 _endpoint(base_url),
                 headers={"Authorization": f"Bearer {api_key}"},
