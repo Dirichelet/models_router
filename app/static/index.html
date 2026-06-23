@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="隐私优先的大模型路由控制台">
+    <title>Models Router</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <section id="auth-panel" class="auth-card" aria-labelledby="auth-title">
+        <div class="brand-mark">MR</div>
+        <p class="eyebrow">PRIVACY-AWARE LLM ROUTING</p>
+        <h1 id="auth-title">Models Router</h1>
+        <p id="auth-copy" class="muted">正在检查账户状态…</p>
+        <form id="auth-form" class="stacked-form" autocomplete="on">
+          <label>
+            用户名
+            <input id="auth-username" name="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" required autocomplete="username">
+          </label>
+          <label>
+            密码
+            <input id="auth-password" name="password" type="password" minlength="12" maxlength="256" required autocomplete="current-password">
+          </label>
+          <button id="auth-submit" class="primary" type="submit">登录</button>
+        </form>
+        <p id="auth-message" class="form-message" role="status"></p>
+      </section>
+
+      <section id="app-shell" class="app-shell" hidden>
+        <header class="topbar">
+          <div class="brand-row">
+            <div class="brand-mark small">MR</div>
+            <div>
+              <p class="eyebrow">SECURE MODEL OPERATIONS</p>
+              <h1>Models Router</h1>
+            </div>
+          </div>
+          <div class="account-row">
+            <span id="current-user" class="muted"></span>
+            <button id="logout-button" class="ghost" type="button">退出登录</button>
+          </div>
+        </header>
+
+        <div id="app-message" class="app-message" role="status"></div>
+
+        <section class="metrics" aria-label="调用指标">
+          <article class="metric-card">
+            <span>总调用</span>
+            <strong id="metric-calls">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>成功调用</span>
+            <strong id="metric-success">0</strong>
+          </article>
+          <article class="metric-card accent">
+            <span>实际消费</span>
+            <strong id="metric-cost">$0.000000</strong>
+          </article>
+        </section>
+
+        <section class="workspace-grid">
+          <article class="panel chat-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">PRIVATE CHAT</p>
+                <h2>发送消息</h2>
+              </div>
+              <span class="status-pill">先脱敏，后路由</span>
+            </div>
+            <div id="chat-output" class="chat-output" aria-live="polite">
+              <div class="empty-state">配置脱敏模型、路由模型和至少一个目标模型后，即可开始聊天。</div>
+            </div>
+            <form id="chat-form" class="chat-form">
+              <label class="sr-only" for="chat-message">消息</label>
+              <textarea id="chat-message" name="message" maxlength="20000" placeholder="在此输入消息；原始消息不会写入调用记录。" required></textarea>
+              <button id="chat-submit" class="primary" type="submit">脱敏并发送</button>
+            </form>
+          </article>
+
+          <article class="panel audit-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">AUDIT TRAIL</p>
+                <h2>最近调用</h2>
+              </div>
+              <button id="refresh-calls" class="ghost" type="button">刷新</button>
+            </div>
+            <div class="audit-scroll">
+              <table>
+                <thead>
+                  <tr><th>时间</th><th>目标模型</th><th>脱敏内容</th><th>消费</th><th>状态</th></tr>
+                </thead>
+                <tbody id="calls-table"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section class="configuration-grid">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">PROVIDERS</p>
+                <h2>模型配置</h2>
+              </div>
+              <button id="reset-model-form" class="ghost" type="button">新建配置</button>
+            </div>
+            <form id="model-form" class="model-form">
+              <input id="model-id" type="hidden">
+              <label>显示名称<input id="model-name" required maxlength="80" placeholder="例如：Gemma 免费模型"></label>
+              <label>用途
+                <select id="model-role" required>
+                  <option value="redactor">脱敏模型</option>
+                  <option value="router">路由模型</option>
+                  <option value="target">目标模型</option>
+                </select>
+              </label>
+              <label class="wide">OpenAI 兼容地址<input id="model-base-url" required type="url" maxlength="500" placeholder="https://provider.example/v1/chat/completions"></label>
+              <label>Provider model<input id="model-provider-name" required maxlength="200" placeholder="provider/model-name"></label>
+              <label>API Key<input id="model-api-key" type="password" maxlength="1000" placeholder="编辑时留空以保留当前密钥"></label>
+              <label>输入单价 / 百万 token (USD)<input id="model-input-price" type="number" min="0" step="0.000001" value="0"></label>
+              <label>输出单价 / 百万 token (USD)<input id="model-output-price" type="number" min="0" step="0.000001" value="0"></label>
+              <label class="toggle"><input id="model-active" type="checkbox" checked> 启用该模型</label>
+              <button id="model-submit" class="primary" type="submit">保存模型</button>
+            </form>
+            <div id="models-list" class="models-list"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">POLICY</p>
+                <h2>脱敏与路由规则</h2>
+              </div>
+            </div>
+            <form id="rules-form" class="stacked-form">
+              <label>脱敏 Markdown 规则<textarea id="redaction-rule" maxlength="12000" required></textarea></label>
+              <label>路由 Markdown 规则<textarea id="routing-rule" maxlength="12000" required></textarea></label>
+              <button class="primary" type="submit">保存规则</button>
+            </form>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
