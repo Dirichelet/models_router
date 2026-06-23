@@ -1,4 +1,4 @@
-const state = { csrfToken: null, models: [], providerModels: [] };
+const state = { csrfToken: null, models: [], providerModels: [], selectedProviderModels: new Set(), providerModelsLoading: false };
 
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char]);
@@ -92,8 +92,9 @@ function renderModels() {
     container.innerHTML = '<div class="empty-state">尚未配置模型。API Key 仅以加密形式保存在服务器。</div>';
     return;
   }
+  const roleLabel = (role) => ({ redactor: "脱敏模型", router: "路由模型", target: "目标模型" })[role] || role;
   container.innerHTML = state.models.map((model) => `
-    <div class="model-row"><div><h3>${escapeHtml(model.name)} ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"}</h3>
+    <div class="model-row"><div><h3>${escapeHtml(model.name)} <span class="role-tag ${escapeHtml(model.role)}">${roleLabel(model.role)}</span> ${model.is_active ? "" : "<span class=\"muted\">(已停用)</span>"}</h3>
     <p>${escapeHtml(model.role)} · ${escapeHtml(model.model_name)} · $${Number(model.input_price_per_million).toFixed(4)}/$${Number(model.output_price_per_million).toFixed(4)} 每百万 token</p></div>
     <div class="model-actions"><button class="ghost test-model" data-id="${model.id}" type="button">测试</button><button class="ghost edit-model" data-id="${model.id}" type="button">编辑</button><button class="ghost danger delete-model" data-id="${model.id}" type="button">删除</button></div></div>`).join("");
 }
@@ -127,7 +128,14 @@ function renderProviderModels() {
   const target = $("#provider-model-options");
   if (!state.providerModels.length) { target.innerHTML = ""; return; }
   if (!options.length) { target.innerHTML = '<p class="field-hint">没有匹配的模型，可继续手动输入 model ID。</p>'; return; }
-  target.innerHTML = options.map((model) => `<button class="provider-model-option" type="button" data-model="${escapeHtml(model)}">${escapeHtml(model)}</button>`).join("");
+  target.innerHTML = options.map((model) => `<button class="provider-model-option ${state.selectedProviderModels.has(model) ? "selected" : ""}" type="button" data-model="${escapeHtml(model)}" aria-pressed="${state.selectedProviderModels.has(model)}"><span class="selection-mark">${state.selectedProviderModels.has(model) ? "✓" : "+"}</span>${escapeHtml(model)}</button>`).join("");
+}
+
+function updateModelSelection() {
+  const selected = [...state.selectedProviderModels];
+  $("#model-selection-count").textContent = selected.length ? `已选择 ${selected.length} 个` : "未选择";
+  $("#model-provider-name").value = selected.join(", ");
+  renderProviderModels();
 }
 
 function resetModelForm() {
@@ -138,9 +146,12 @@ function resetModelForm() {
   $("#model-output-price").value = "0";
   $("#model-submit").textContent = "保存模型";
   state.providerModels = [];
+  state.selectedProviderModels = new Set();
+  state.providerModelsLoading = false;
   $("#model-fuzzy-search").value = "";
   $("#provider-model-options").innerHTML = "";
   $("#provider-model-status").textContent = "尚未加载模型列表。";
+  $("#model-selection-count").textContent = "未选择";
 }
 
 function editModel(id) {
@@ -157,18 +168,20 @@ function editModel(id) {
   $("#model-output-price").value = model.output_price_per_million;
   $("#model-active").checked = model.is_active;
   $("#model-submit").textContent = "更新模型";
+  state.selectedProviderModels = new Set([model.model_name]);
+  $("#model-selection-count").textContent = "已选择 1 个";
   $("#model-form").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-async function fetchProviderModels() {
-  const button = $("#fetch-provider-models");
+async function ensureProviderModels() {
   const status = $("#provider-model-status");
   const baseUrl = $("#model-base-url").value.trim();
   const apiKey = $("#model-api-key").value;
   const modelId = Number($("#model-id").value);
+  if (state.providerModelsLoading || state.providerModels.length) return;
   if (!baseUrl) { status.textContent = "请先填写以 /v1 结尾的 Base URL。"; return; }
-  if (!apiKey && !modelId) { status.textContent = "新模型需要先填写 API Key 才能获取列表。"; return; }
-  button.disabled = true;
+  if (!apiKey && !modelId) { status.textContent = "新模型需要先填写 API Key 才能自动获取列表。"; return; }
+  state.providerModelsLoading = true;
   status.textContent = "正在读取 Provider 模型列表…";
   try {
     const result = modelId && !apiKey
@@ -177,7 +190,31 @@ async function fetchProviderModels() {
     state.providerModels = result.models;
     status.textContent = `已加载 ${result.models.length} 个模型；可搜索并点击选择。`;
     renderProviderModels();
-  } catch (error) { status.textContent = error.message; state.providerModels = []; renderProviderModels(); } finally { button.disabled = false; }
+  } catch (error) { status.textContent = error.message; state.providerModels = []; renderProviderModels(); } finally { state.providerModelsLoading = false; }
+}
+
+function clearProviderModels() {
+  state.providerModels = [];
+  state.selectedProviderModels = new Set();
+  $("#model-fuzzy-search").value = "";
+  $("#model-selection-count").textContent = "未选择";
+  $("#provider-model-options").innerHTML = "";
+  $("#provider-model-status").textContent = "填写 Base URL 和 API Key 后，点击此区域会自动加载模型列表。";
+}
+
+function toggleProviderModel(model) {
+  const role = $("#model-role").value;
+  const isEditing = Boolean(Number($("#model-id").value));
+  if (role !== "target" || isEditing) {
+    state.selectedProviderModels = new Set([model]);
+  } else if (state.selectedProviderModels.has(model)) {
+    state.selectedProviderModels.delete(model);
+  } else {
+    state.selectedProviderModels.add(model);
+  }
+  updateModelSelection();
+  const selected = state.selectedProviderModels.size;
+  $("#provider-model-status").textContent = selected > 1 ? `已选择 ${selected} 个目标模型；保存时将创建多条目标模型配置。` : `已选择 ${selected || 0} 个模型。`;
 }
 
 function appendChat(kind, content) {
@@ -249,17 +286,49 @@ $("#password-form").addEventListener("submit", async (event) => {
 $("#model-form").addEventListener("submit", async (event) => {
   event.preventDefault(); const id = Number($("#model-id").value);
   const data = { name: $("#model-name").value.trim(), role: $("#model-role").value, base_url: $("#model-base-url").value.trim(), api_key: $("#model-api-key").value, model_name: $("#model-provider-name").value.trim(), input_price_per_million: Number($("#model-input-price").value), output_price_per_million: Number($("#model-output-price").value), is_active: $("#model-active").checked };
+  const selectedModels = [...state.selectedProviderModels];
+  const modelNames = selectedModels.length ? selectedModels : [data.model_name];
   if (id && !data.api_key) delete data.api_key;
-  try { await api(id ? `/api/models/${id}` : "/api/models", { method: id ? "PUT" : "POST", body: JSON.stringify(data) }); setMessage("模型配置已保存。", "success"); resetModelForm(); await loadDashboard(); } catch (error) { setMessage(error.message); }
+  if (!id && modelNames.length > 1 && data.role !== "target") { setMessage("多选仅支持目标模型；脱敏模型和路由模型一次只能选择一个。"); return; }
+  try {
+    if (!id && modelNames.length > 1) {
+      const prefix = data.name;
+      const models = modelNames.map((modelName) => ({ ...data, name: `${prefix} · ${modelName}`.slice(0, 80), model_name: modelName }));
+      await api("/api/models/batch", { method: "POST", body: JSON.stringify({ models }) });
+      setMessage(`已创建 ${models.length} 个目标模型配置。`, "success");
+    } else {
+      data.model_name = modelNames[0];
+      await api(id ? `/api/models/${id}` : "/api/models", { method: id ? "PUT" : "POST", body: JSON.stringify(data) });
+      setMessage("模型配置已保存。", "success");
+    }
+    resetModelForm(); await loadDashboard();
+  } catch (error) { setMessage(error.message); }
 });
 
-$("#fetch-provider-models").addEventListener("click", fetchProviderModels);
-$("#model-fuzzy-search").addEventListener("input", renderProviderModels);
+$("#model-provider-name").addEventListener("focus", ensureProviderModels);
+$("#model-provider-name").addEventListener("input", () => {
+  const selectedText = [...state.selectedProviderModels].join(", ");
+  if ($("#model-provider-name").value !== selectedText) {
+    state.selectedProviderModels = new Set();
+    $("#model-selection-count").textContent = "手动输入";
+    renderProviderModels();
+  }
+});
+$("#model-fuzzy-search").addEventListener("focus", ensureProviderModels);
+$("#model-fuzzy-search").addEventListener("input", () => { ensureProviderModels(); renderProviderModels(); });
+$("#model-base-url").addEventListener("input", clearProviderModels);
+$("#model-api-key").addEventListener("input", clearProviderModels);
+$("#model-role").addEventListener("change", () => {
+  if ($("#model-role").value !== "target" && state.selectedProviderModels.size > 1) {
+    state.selectedProviderModels = new Set([[...state.selectedProviderModels][0]]);
+    updateModelSelection();
+  }
+});
 $("#provider-model-options").addEventListener("click", (event) => {
-  const model = event.target.dataset.model;
+  const option = event.target.closest("[data-model]");
+  const model = option?.dataset.model;
   if (!model) return;
-  $("#model-provider-name").value = model;
-  $("#provider-model-status").textContent = `已选择 ${model}。`;
+  toggleProviderModel(model);
 });
 $("#models-list").addEventListener("click", async (event) => {
   const id = Number(event.target.dataset.id); if (!id) return;

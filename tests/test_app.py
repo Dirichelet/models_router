@@ -409,3 +409,16 @@ def test_saved_model_picker_uses_encrypted_key_and_default_rules_are_detailed(mo
         assert defaults == DEFAULT_RULES
         assert len(defaults["redaction"]) > 500
         assert len(defaults["routing"]) > 400
+
+
+def test_multiple_selected_target_models_can_be_created_together() -> None:
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        first = model_payload("target-alpha", "target")
+        first["model_name"] = "provider/alpha"
+        second = model_payload("target-beta", "target")
+        second["model_name"] = "provider/beta"
+        response = test_client.post("/api/models/batch", headers=headers, json={"models": [first, second]})
+        assert response.status_code == 201, response.text
+        assert [model["model_name"] for model in response.json()["models"]] == ["provider/alpha", "provider/beta"]
+        assert test_client.get("/api/pipeline/status").json()["active_targets"] == 2

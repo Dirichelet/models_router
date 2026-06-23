@@ -61,10 +61,10 @@
               <label>用途<select id="model-role" required><option value="redactor">脱敏模型</option><option value="router">路由模型</option><option value="target">目标模型</option></select></label>
               <label class="wide">Base URL<input id="model-base-url" required type="url" maxlength="500" placeholder="https://provider.example/v1"><span class="field-hint">填写 `/v1`，不要填写 `/chat/completions`。</span></label>
               <label>API Key<input id="model-api-key" type="password" maxlength="1000" placeholder="编辑时留空以保留当前密钥"></label>
-              <div class="wide provider-picker">
-                <div class="picker-heading"><label>Provider 模型<input id="model-provider-name" required maxlength="200" placeholder="先获取模型列表，或手动输入 model ID"></label><button id="fetch-provider-models" class="ghost" type="button">获取模型列表</button></div>
-                <label>模糊搜索模型<input id="model-fuzzy-search" maxlength="200" placeholder="输入名称、厂商或任意字符筛选"></label>
-                <div id="provider-model-status" class="field-hint" role="status">尚未加载模型列表。</div>
+              <div class="wide provider-picker" id="provider-picker">
+                <div class="picker-heading"><label>Provider 模型<input id="model-provider-name" required maxlength="200" placeholder="点击此处自动加载并选择模型；也可手动输入 model ID"></label><span id="model-selection-count" class="selection-count">未选择</span></div>
+                <label>模糊搜索模型<input id="model-fuzzy-search" maxlength="200" placeholder="点击此处自动加载；输入名称、厂商或任意字符筛选"></label>
+                <div id="provider-model-status" class="field-hint" role="status">填写 Base URL 和 API Key 后，点击此区域会自动加载模型列表。</div>
                 <div id="provider-model-options" class="provider-model-options" aria-live="polite"></div>
               </div>
               <label>输入单价 / 百万 token (USD)<input id="model-input-price" type="number" min="0" step="0.000001" value="0"></label>

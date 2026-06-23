@@ -178,6 +178,10 @@ class ModelUpdate(BaseModel):
         return ModelCreate.validate_base_url(value)
 
 
+class ModelBatchCreate(BaseModel):
+    models: list[ModelCreate] = Field(min_length=1, max_length=100)
+
+
 class ProviderModelsRequest(BaseModel):
     base_url: str = Field(min_length=8, max_length=500)
     api_key: str = Field(min_length=1, max_length=1000)
@@ -603,6 +607,40 @@ def create_model(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Model name already exists") from exc
         row = connection.execute("SELECT * FROM models WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return _serialise_model(row)
+
+
+@app.post("/api/models/batch", status_code=status.HTTP_201_CREATED)
+def create_target_models_batch(
+    batch: ModelBatchCreate,
+    _: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> dict[str, list[dict[str, Any]]]:
+    """Create several active target models selected from one provider in one transaction."""
+    if any(model.role != "target" for model in batch.models):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Batch creation supports target models only")
+    names = [model.name.strip() for model in batch.models]
+    if len(names) != len(set(names)):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Each selected model needs a unique display name")
+    now = utc_text()
+    with database.connection() as connection:
+        rows: list[sqlite3.Row] = []
+        try:
+            for model in batch.models:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO models(
+                        name, role, base_url, api_key_encrypted, model_name, input_price_per_million,
+                        output_price_per_million, is_active, created_at, updated_at
+                    ) VALUES (?, 'target', ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        model.name.strip(), model.base_url, secret_box.encrypt(model.api_key), model.model_name.strip(),
+                        model.input_price_per_million, model.output_price_per_million, int(model.is_active), now, now,
+                    ),
+                )
+                rows.append(connection.execute("SELECT * FROM models WHERE id = ?", (cursor.lastrowid,)).fetchone())
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="One or more model names already exist") from exc
+    return {"models": [_serialise_model(row) for row in rows]}
 
 
 @app.put("/api/models/{model_id}")
