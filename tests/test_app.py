@@ -23,6 +23,7 @@ from app import main as application  # noqa: E402
 from app import redaction as local_redaction  # noqa: E402
 from app.provider import Completion, Usage  # noqa: E402
 from app.provider import ProviderError, chat_completion  # noqa: E402
+from app.provider import _trust_environment_proxy  # noqa: E402
 from app.database import DEFAULT_RULES  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.redaction import KeywordRule, RedactionResult, _apply_model_spans, _replace_keywords, _replace_regex  # noqa: E402
@@ -733,6 +734,14 @@ def test_provider_rate_limit_is_safe_and_includes_retry_guidance(monkeypatch) ->
     else:
         raise AssertionError("Expected ProviderError")
     assert captured["trust_env"] is True
+
+
+def test_private_provider_urls_bypass_environment_proxy(monkeypatch) -> None:
+    monkeypatch.setenv("PROVIDER_TRUST_ENV", "true")
+    assert _trust_environment_proxy("https://openrouter.ai/api/v1") is True
+    assert _trust_environment_proxy("http://127.0.0.1:8000/v1") is False
+    assert _trust_environment_proxy("http://172.17.0.1:8000/v1") is False
+    assert _trust_environment_proxy("http://192.168.1.20:8000/v1") is False
 
 
 def test_model_picker_lists_provider_models_without_returning_credentials(monkeypatch) -> None:

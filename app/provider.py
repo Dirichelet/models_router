@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+from ipaddress import ip_address
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -30,13 +32,29 @@ class Completion:
     usage: Usage
 
 
-def _trust_environment_proxy() -> bool:
+def _is_local_or_private_base_url(base_url: str) -> bool:
+    hostname = urlparse(base_url).hostname
+    if not hostname:
+        return False
+    normalized = hostname.casefold()
+    if normalized in {"localhost", "localhost.localdomain"} or normalized.endswith(".localhost"):
+        return True
+    try:
+        address = ip_address(normalized)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
+def _trust_environment_proxy(base_url: str) -> bool:
     """Allow deployments with an explicit outbound proxy to reach providers.
 
     Provider traffic is always initiated from server-side configuration. Honour
     standard proxy variables by default, while allowing hardened/direct-only
     deployments to opt out with ``PROVIDER_TRUST_ENV=false``.
     """
+    if _is_local_or_private_base_url(base_url):
+        return False
     value = os.getenv("PROVIDER_TRUST_ENV", "true").strip().lower()
     return value in {"1", "true", "yes", "on"}
 
@@ -83,7 +101,7 @@ async def chat_completion(
         request_body["max_tokens"] = max_tokens
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0), trust_env=_trust_environment_proxy()
+            timeout=httpx.Timeout(60.0, connect=10.0), trust_env=_trust_environment_proxy(base_url)
         ) as client:
             response = await client.post(
                 _endpoint(base_url),
@@ -117,7 +135,7 @@ async def available_models(*, base_url: str, api_key: str) -> list[str]:
     """Retrieve model IDs from an OpenAI-compatible ``/v1/models`` endpoint."""
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0), trust_env=_trust_environment_proxy()
+            timeout=httpx.Timeout(30.0, connect=10.0), trust_env=_trust_environment_proxy(base_url)
         ) as client:
             response = await client.get(
                 _models_endpoint(base_url),
