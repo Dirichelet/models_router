@@ -544,6 +544,11 @@ def test_development_defaults_allow_workspace_preview_hosts(monkeypatch) -> None
     assert application.Settings.from_environment().trusted_hosts == ["*"]
 
 
+def test_console_is_hidden_before_authentication() -> None:
+    stylesheet = (Path(__file__).resolve().parent.parent / "app" / "static" / "styles.css").read_text(encoding="utf-8")
+    assert ".app-shell[hidden] { display: none; }" in stylesheet
+
+
 def test_local_redactor_and_classifier_override_web_roles(monkeypatch, tmp_path) -> None:
     redactor = tmp_path / "redactor"
     classifier = tmp_path / "classifier.gguf"

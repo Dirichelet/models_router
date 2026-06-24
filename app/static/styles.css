@@ -46,6 +46,9 @@ textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
 .app-message.success { color: var(--green); }
 
 .app-shell { display: grid; gap: 22px; }
+/* Author display rules override the browser's default [hidden] rule. Keep the
+   console out of the DOM layout until a valid authenticated session exists. */
+.app-shell[hidden] { display: none; }
 .topbar, .panel-heading, .brand-row, .account-row { display: flex; align-items: center; }
 .topbar { justify-content: space-between; padding: 8px 2px; }
 .brand-row { gap: 12px; }
