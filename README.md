@@ -13,13 +13,15 @@ export APP_ENV=development
 export COOKIE_SECURE=false
 # 如部署环境通过 HTTP(S)_PROXY / ALL_PROXY 出网，保持默认 true
 export PROVIDER_TRUST_ENV=true
+# 选择一个未被占用的端口；本项目默认 9900
+export PORT=9900
 
 uv run python main.py
 ```
 
 开发模式首次启动会在 `data/.dev-fernet.key` 生成并持久保存本地加密密钥；后续启动会复用它。不要删除该文件或每次手动更换 `FERNET_KEY`，否则已保存的模型 API Key 需要重新填写。
 
-打开工作区转发的 9898 端口；若该端口被工作区内其他服务占用，可在启动命令中改用未占用端口，例如 `uv run uvicorn app.main:app --host 0.0.0.0 --port 9899`。在同一台机器本地运行时可访问 `http://127.0.0.1:9898`。开发模式不要求启动令牌，且会允许工作区预览网关；生产部署必须设置 `TRUSTED_HOSTS`。
+启动日志会显示实际端口。随后在工作区的“端口/Ports”面板打开该端口（上例为 9900）；同一台机器本地运行时访问 `http://127.0.0.1:9900`。若端口已被占用，换成任意空闲端口，例如 `export PORT=9910` 后重新执行启动命令。开发模式不要求启动令牌，且会允许工作区预览网关；生产部署必须设置 `TRUSTED_HOSTS`。
 
 ### 首次配置
 
@@ -83,13 +85,13 @@ uv run python tests/eval_redaction.py --offline
 
 ## 供其他 Agent / Chat 客户端调用
 
-在网页的“服务 API”页签生成专用 API Key。完整 Key 只显示一次，妥善保存。然后将其他客户端的 OpenAI Base URL 指向本服务的 `/v1`：本地开发示例为 `http://127.0.0.1:9898/v1`。
+在网页的“服务 API”页签生成专用 API Key。完整 Key 只显示一次，妥善保存。然后将其他客户端的 OpenAI Base URL 指向本服务的 `/v1`：本地开发示例为 `http://127.0.0.1:9900/v1`。
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://127.0.0.1:9898/v1",
+    base_url="http://127.0.0.1:9900/v1",
     api_key="mr_从服务API页面生成的Key",
 )
 

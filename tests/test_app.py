@@ -549,6 +549,17 @@ def test_console_is_hidden_before_authentication() -> None:
     assert ".app-shell[hidden] { display: none; }" in stylesheet
 
 
+def test_development_entry_point_uses_a_configurable_port(monkeypatch) -> None:
+    import main as entry_point
+
+    monkeypatch.delenv("HOST", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+    assert entry_point.server_address() == ("0.0.0.0", 9900)
+    monkeypatch.setenv("HOST", "127.0.0.1")
+    monkeypatch.setenv("PORT", "9910")
+    assert entry_point.server_address() == ("127.0.0.1", 9910)
+
+
 def test_local_redactor_and_classifier_override_web_roles(monkeypatch, tmp_path) -> None:
     redactor = tmp_path / "redactor"
     classifier = tmp_path / "classifier.gguf"
