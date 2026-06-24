@@ -52,6 +52,25 @@ class PasswordHasher:
             return False
 
 
+def validate_password_strength(password: str) -> str:
+    """Apply the password policy shared by web and local recovery flows."""
+    if not 12 <= len(password) <= 256:
+        raise ValueError("Password must contain 12 to 256 characters")
+    if len(set(password)) < 4:
+        raise ValueError("Password must not be a repeated-character password")
+    character_classes = sum(
+        (
+            any(char.islower() for char in password),
+            any(char.isupper() for char in password),
+            any(char.isdigit() for char in password),
+            any(not char.isalnum() for char in password),
+        )
+    )
+    if len(password) < 16 and character_classes < 3:
+        raise ValueError("Passwords shorter than 16 characters must use at least three character classes")
+    return password
+
+
 class SecretBox:
     def __init__(self, key: str) -> None:
         self._fernet = Fernet(key.encode("utf-8"))

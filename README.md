@@ -34,6 +34,14 @@ uv run python main.py
 
 原始消息不会写进审计记录；如需删除已保存的脱敏内容和消费记录，可在“最近调用”区域点击“清除记录”。
 
+### 忘记管理员密码
+
+不要删除 `data/`，否则会丢失模型配置和已加密的 Provider Key。在项目根目录运行以下本机恢复命令；它会交互式读取新密码（不会出现在终端历史中），并使该账户所有已登录浏览器会话失效：
+
+```bash
+uv run python scripts/reset_admin_password.py --username <管理员用户名>
+```
+
 ### 可选：从后端环境变量加载本地脱敏/分类模型
 
 本地模型不在网页上传或配置，避免将模型路径和运行参数暴露给浏览器。脱敏使用 `transformers` 本地目录，并强制 `local_files_only=True`：运行期不会下载模型或发送内容到 Provider。链路为 Regex（手机号、身份证、邮箱、密钥、IP 等）→ `openai/privacy-filter` → 可选中文 NER。若服务器已有官方 Hugging Face 缓存（`models--openai--privacy-filter`），会自动发现并启用；否则通过环境变量指定已下载目录。

@@ -37,7 +37,7 @@ from .redaction import (
     local_redact,
     local_redactor_runtime_error,
 )
-from .security import PasswordHasher, SecretBox, new_token, token_hash
+from .security import PasswordHasher, SecretBox, new_token, token_hash, validate_password_strength
 
 
 logger = logging.getLogger(__name__)
@@ -115,19 +115,7 @@ class Credentials(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password_strength(cls, value: str) -> str:
-        if len(set(value)) < 4:
-            raise ValueError("Password must not be a repeated-character password")
-        character_classes = sum(
-            (
-                any(char.islower() for char in value),
-                any(char.isupper() for char in value),
-                any(char.isdigit() for char in value),
-                any(not char.isalnum() for char in value),
-            )
-        )
-        if len(value) < 16 and character_classes < 3:
-            raise ValueError("Passwords shorter than 16 characters must use at least three character classes")
-        return value
+        return validate_password_strength(value)
 
 
 class BootstrapCredentials(Credentials):
