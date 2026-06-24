@@ -538,6 +538,12 @@ def test_cached_privacy_filter_is_used_when_no_redactor_path_is_set(monkeypatch,
     assert settings.local_redactor_model_path == snapshot.resolve()
 
 
+def test_development_defaults_allow_workspace_preview_hosts(monkeypatch) -> None:
+    monkeypatch.delenv("TRUSTED_HOSTS", raising=False)
+    monkeypatch.setenv("APP_ENV", "development")
+    assert application.Settings.from_environment().trusted_hosts == ["*"]
+
+
 def test_local_redactor_and_classifier_override_web_roles(monkeypatch, tmp_path) -> None:
     redactor = tmp_path / "redactor"
     classifier = tmp_path / "classifier.gguf"

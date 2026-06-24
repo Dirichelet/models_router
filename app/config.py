@@ -109,7 +109,11 @@ class Settings:
         if app_env == "production" and (len(bootstrap_token) < 24 or bootstrap_token.startswith("replace-")):
             raise RuntimeError("A random BOOTSTRAP_TOKEN of at least 24 characters is required in production")
 
-        raw_hosts = os.getenv("TRUSTED_HOSTS", "localhost,127.0.0.1,testserver")
+        # Development workspaces are reached through a browser preview gateway
+        # whose host name/IP is not known in advance. Production still requires
+        # an explicit allow-list from the deployment environment.
+        default_hosts = "*" if app_env == "development" else "localhost,127.0.0.1"
+        raw_hosts = os.getenv("TRUSTED_HOSTS", default_hosts)
         trusted_hosts = [host.strip() for host in raw_hosts.split(",") if host.strip()]
         if not trusted_hosts:
             raise RuntimeError("TRUSTED_HOSTS must contain at least one host")
