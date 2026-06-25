@@ -21,7 +21,7 @@ os.environ["HF_HOME"] = "/tmp/models-router-test-huggingface"
 
 from app import main as application  # noqa: E402
 from app import redaction as local_redaction  # noqa: E402
-from app.provider import Completion, Usage  # noqa: E402
+from app.provider import Completion, CompletionChunk, Usage  # noqa: E402
 from app.provider import ProviderError, chat_completion  # noqa: E402
 from app.provider import _provider_headers, _trust_environment_proxy  # noqa: E402
 from app.database import DEFAULT_RULES  # noqa: E402
@@ -513,6 +513,37 @@ def test_chat_context_is_sent_to_the_pipeline_without_persisting_raw_turns(monke
         assert "Previous question" not in test_client.get("/api/calls").json()[0]["redacted_message"]
 
 
+def test_browser_chat_streams_answer_and_records_audit(monkeypatch) -> None:
+    requests = []
+
+    async def fake_completion(**kwargs):
+        requests.append(kwargs)
+        return Completion('{"model_id": 2, "reason": "Streaming target."}', Usage(4, 2))
+
+    async def fake_stream_completion(**kwargs):
+        requests.append(kwargs)
+        yield CompletionChunk("Hello, ")
+        yield CompletionChunk("stream.", Usage(8, 4))
+
+    monkeypatch.setattr(application, "chat_completion", fake_completion)
+    monkeypatch.setattr(application, "stream_chat_completion", fake_stream_completion)
+    enable_local_redaction(monkeypatch, "Question for [PERSON].")
+    with client() as test_client:
+        headers = bootstrap(test_client)
+        assert test_client.post("/api/models", headers=headers, json=model_payload("router", "router")).status_code == 201
+        assert test_client.post("/api/models", headers=headers, json=model_payload("target", "target")).status_code == 201
+        response = test_client.post("/api/chat/stream", headers=headers, json={"message": "Question for Alice"})
+        assert response.status_code == 200, response.text
+        assert "text/event-stream" in response.headers["content-type"]
+        assert "event: meta" in response.text
+        assert 'data: {"content": "Hello, "}' in response.text
+        assert 'data: {"content": "stream."}' in response.text
+        assert "event: done" in response.text
+        audit = test_client.get("/api/calls").json()[0]
+        assert audit["status"] == "succeeded"
+        assert audit["selected_model_name"] == "target"
+
+
 def test_development_fernet_key_is_created_once_and_reused(monkeypatch, tmp_path) -> None:
     database_path = tmp_path / "data" / "models_router.db"
     monkeypatch.setenv("APP_ENV", "development")
@@ -830,6 +861,7 @@ def test_openai_compatible_service_api_routes_agent_messages(monkeypatch) -> Non
         (
             Completion('{"model_id": 2, "reason": "Suitable."}', Usage(10, 5)),
             Completion("Agent-compatible answer.", Usage(10, 5)),
+            Completion('{"model_id": 2, "reason": "Stream suitable."}', Usage(7, 3)),
         )
     )
 
@@ -840,6 +872,13 @@ def test_openai_compatible_service_api_routes_agent_messages(monkeypatch) -> Non
         return next(completions)
 
     monkeypatch.setattr(application, "chat_completion", fake_completion)
+
+    async def fake_stream_completion(**kwargs):
+        provider_requests.append(kwargs)
+        yield CompletionChunk("Streamed ")
+        yield CompletionChunk("answer.", Usage(11, 6))
+
+    monkeypatch.setattr(application, "stream_chat_completion", fake_stream_completion)
     enable_local_redaction(monkeypatch, "[SYSTEM]\nUse concise answers.\n\n[USER]\nQuestion about [PERSON].\n\n[TOOL]\nLookup result: reference data")
     with client() as test_client:
         csrf = bootstrap(test_client)
@@ -878,7 +917,13 @@ def test_openai_compatible_service_api_routes_agent_messages(monkeypatch) -> Non
             headers=api_headers,
             json={"model": "models-router", "stream": True, "messages": [{"role": "user", "content": "Hello"}]},
         )
-        assert streaming.status_code == 400
+        assert streaming.status_code == 200
+        assert "text/event-stream" in streaming.headers["content-type"]
+        streamed_text = streaming.text
+        assert '"object": "chat.completion.chunk"' in streamed_text
+        assert '"content": "Streamed "' in streamed_text
+        assert '"content": "answer."' in streamed_text
+        assert "data: [DONE]" in streamed_text
 
         revoked = test_client.delete("/api/service-key", headers=csrf)
         assert revoked.json() == {"revoked": True}

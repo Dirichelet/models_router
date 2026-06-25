@@ -272,6 +272,7 @@ function appendChat(kind, content) {
   message.textContent = content;
   output.append(message);
   output.scrollTop = output.scrollHeight;
+  return message;
 }
 
 function appendPipeline(result) {
@@ -443,14 +444,55 @@ $("#keyword-rules-list").addEventListener("click", async (event) => {
 $("#chat-form").addEventListener("submit", async (event) => {
   event.preventDefault(); const input = $("#chat-message"), button = $("#chat-submit"), message = input.value.trim(); if (!message) return;
   appendChat("user", message); input.value = ""; button.disabled = true;
+  const assistantMessage = appendChat("assistant", "");
   try {
     const context = state.chatHistory.slice(-16);
-    const result = await api("/api/chat", { method: "POST", body: JSON.stringify({ message, context }) });
-    appendPipeline(result); appendChat("assistant", result.answer);
-    state.chatHistory.push({ role: "user", content: message }, { role: "assistant", content: result.answer });
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (state.csrfToken) headers.set("X-CSRF-Token", state.csrfToken);
+    const response = await fetch("/api/chat/stream", { method: "POST", headers, credentials: "same-origin", body: JSON.stringify({ message, context }) });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || "请求失败");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResult = null;
+    const processEvent = (rawEvent) => {
+      if (!rawEvent.trim()) return;
+      let eventName = "message";
+      const dataLines = [];
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (!dataLines.length) return;
+      const data = JSON.parse(dataLines.join("\n"));
+      if (eventName === "delta") {
+        assistantMessage.textContent += data.content || "";
+        $("#chat-output").scrollTop = $("#chat-output").scrollHeight;
+      } else if (eventName === "done") {
+        finalResult = data;
+      } else if (eventName === "error") {
+        throw new Error(data.detail || "流式调用失败");
+      }
+    };
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+      for (const rawEvent of events) processEvent(rawEvent);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) processEvent(buffer);
+    if (!finalResult) throw new Error("流式响应未正常结束");
+    appendPipeline(finalResult);
+    state.chatHistory.push({ role: "user", content: message }, { role: "assistant", content: assistantMessage.textContent });
     if (state.chatHistory.length > 16) state.chatHistory = state.chatHistory.slice(-16);
     await refreshCalls();
-  } catch (error) { appendChat("assistant", `调用失败：${error.message}`); await refreshCalls(); } finally { button.disabled = false; }
+  } catch (error) { assistantMessage.textContent = `调用失败：${error.message}`; await refreshCalls(); } finally { button.disabled = false; }
 });
 $("#chat-message").addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return;

@@ -13,16 +13,17 @@ import time
 import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, AsyncIterator, Literal
 from urllib.parse import urlparse
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -30,7 +31,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .config import Settings
 from .database import DEFAULT_RULES, Database
 from .local_models import LocalModelOptions, local_chat_completion, local_runtime_error
-from .provider import Completion, ProviderError, Usage, available_models as fetch_provider_models, chat_completion
+from .provider import Completion, CompletionChunk, ProviderError, Usage, available_models as fetch_provider_models, chat_completion, stream_chat_completion
 from .redaction import (
     KeywordRule as RedactionKeywordRule,
     LocalRedactorOptions,
@@ -57,6 +58,22 @@ SENSITIVE_VALUE_PATTERNS = (
 
 class PrivacyVerificationError(ValueError):
     """Raised before a redaction failure can be sent to routing or target providers."""
+
+
+@dataclass
+class ChatRun:
+    user_id: int
+    redactor_name: str | None = None
+    router_name: str | None = None
+    selected: sqlite3.Row | None = None
+    redacted: str | None = None
+    redaction_verified: bool = False
+    redaction_applied: bool = False
+    routing_reason: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_cost: float = 0.0
+    cost_known: bool = True
 
 
 def utc_now() -> datetime:
@@ -563,6 +580,23 @@ async def _invoke(
     )
 
 
+async def _stream_invoke(
+    model: sqlite3.Row,
+    messages: list[dict[str, str]],
+    temperature: float = 0.1,
+    max_tokens: int | None = None,
+) -> AsyncIterator[CompletionChunk]:
+    async for chunk in stream_chat_completion(
+        base_url=model["base_url"],
+        api_key=secret_box.decrypt(model["api_key_encrypted"]),
+        model_name=model["model_name"],
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    ):
+        yield chunk
+
+
 def _cost(model: sqlite3.Row, usage: Usage) -> float:
     return round(
         (usage.prompt_tokens * float(model["input_price_per_million"]) + usage.completion_tokens * float(model["output_price_per_million"]))
@@ -656,6 +690,41 @@ def _conversation_input(message: str, context: list[ChatHistoryMessage]) -> str:
     turns = [f"[{turn.role.upper()}]\n{turn.content.strip()}" for turn in context]
     turns.append(f"[USER]\n{message}")
     return "\n\n".join(turns)
+
+
+def _target_messages(redaction_applied: bool, redacted: str) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Answer the user helpfully. The supplied conversation has already been redacted; "
+                "never request the original sensitive data."
+                if redaction_applied
+                else "Answer the user helpfully. The supplied conversation was not redacted; do not request unnecessary sensitive data."
+            ),
+        },
+        {"role": "user", "content": redacted},
+    ]
+
+
+def _chat_result(run: ChatRun, answer: str, call_id: int) -> dict[str, Any]:
+    return {
+        "call_id": call_id,
+        "answer": answer,
+        "redacted_message": run.redacted if run.redaction_applied else None,
+        "redaction_applied": run.redaction_applied,
+        "selected_model": run.selected["name"] if run.selected else None,
+        "routing_reason": run.routing_reason,
+        "prompt_tokens": run.prompt_tokens,
+        "completion_tokens": run.completion_tokens,
+        "total_cost": round(run.total_cost, 8),
+        "cost_known": run.cost_known,
+    }
+
+
+def _sse(event: str, data: dict[str, Any] | str) -> str:
+    encoded = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {encoded}\n\n"
 
 
 def _record_call(
@@ -1215,6 +1284,36 @@ async def chat(
     payload: ChatRequest,
     user: Annotated[dict[str, Any], Depends(csrf_user)],
 ) -> dict[str, Any]:
+    run = ChatRun(user_id=user["id"])
+    target_messages = await _prepare_chat_run(payload, user, run)
+    try:
+        answer = await _invoke(run.selected, target_messages)
+        run.prompt_tokens += answer.usage.prompt_tokens
+        run.completion_tokens += answer.usage.completion_tokens
+        run.total_cost += _cost(run.selected, answer.usage)
+        run.cost_known = run.cost_known and answer.usage.reported
+        run.total_cost = round(run.total_cost, 8)
+        call_id = _record_call(
+            user_id=run.user_id, redactor_name=run.redactor_name, router_name=run.router_name, target_name=run.selected["name"],
+            redacted_message=run.redacted if run.redaction_applied else None, routing_reason=run.routing_reason, prompt_tokens=run.prompt_tokens,
+            completion_tokens=run.completion_tokens, total_cost=run.total_cost, cost_known=run.cost_known, status_name="succeeded",
+        )
+        return _chat_result(run, answer.content, call_id)
+    except (ProviderError, ValueError) as exc:
+        safe_error = str(exc)[:300]
+        _record_chat_failure(run, safe_error)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=safe_error) from exc
+    except Exception as exc:  # Keep implementation failures out of the client response and audit payload.
+        logger.exception("Unexpected chat pipeline failure")
+        _record_chat_failure(run, "Unexpected pipeline failure")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected pipeline failure") from exc
+
+
+async def _prepare_chat_run(
+    payload: ChatRequest,
+    user: dict[str, Any],
+    run: ChatRun,
+) -> list[dict[str, str]]:
     message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Message cannot be empty")
@@ -1222,39 +1321,31 @@ async def chat(
     rules = _rules()
     keyword_rules = _keyword_rules(user["id"])
     conversation = _conversation_input(message, payload.context)
-    redacted: str | None = None
-    redaction_verified = False
-    redaction_applied = bool(settings.local_redactor_model_path)
-    redactor_name = (
+    run.redaction_applied = bool(settings.local_redactor_model_path)
+    run.redactor_name = (
         _local_redactor_label(settings.local_redactor_model_path)
         if settings.local_redactor_model_path
         else None
     )
-    router_name = (
+    run.router_name = (
         _local_classifier_label(settings.local_classifier_model_path)
         if settings.local_classifier_model_path
         else router["name"] if router else "内置难度/费率路由"
     )
-    selected: sqlite3.Row | None = None
-    routing_reason: str | None = None
-    prompt_tokens = 0
-    completion_tokens = 0
-    total_cost = 0.0
-    cost_known = True
 
     try:
         if settings.local_redactor_model_path:
-            redacted = (await asyncio.to_thread(local_redact, _local_redactor_options(), conversation, keyword_rules)).text
+            run.redacted = (await asyncio.to_thread(local_redact, _local_redactor_options(), conversation, keyword_rules)).text
         else:
-            redacted = conversation
+            run.redacted = conversation
 
-        if redaction_applied:
-            leaked_values = _leaked_sensitive_values(conversation, redacted)
+        if run.redaction_applied:
+            leaked_values = _leaked_sensitive_values(conversation, run.redacted)
             if leaked_values:
                 raise PrivacyVerificationError(
                     "Automated de-identification check blocked sensitive content before routing or target inference"
                 )
-            redaction_verified = True
+            run.redaction_verified = True
 
         candidates = [
             {
@@ -1275,81 +1366,97 @@ async def chat(
         if router:
             routing = await _invoke(
                 router,
-                [{"role": "system", "content": router_system}, {"role": "user", "content": redacted}],
+                [{"role": "system", "content": router_system}, {"role": "user", "content": run.redacted}],
                 temperature=0,
             )
-            prompt_tokens += routing.usage.prompt_tokens
-            completion_tokens += routing.usage.completion_tokens
-            total_cost += _cost(router, routing.usage)
-            cost_known = cost_known and routing.usage.reported
-            selected, routing_reason = _choose_target(routing.content, targets)
+            run.prompt_tokens += routing.usage.prompt_tokens
+            run.completion_tokens += routing.usage.completion_tokens
+            run.total_cost += _cost(router, routing.usage)
+            run.cost_known = run.cost_known and routing.usage.reported
+            run.selected, run.routing_reason = _choose_target(routing.content, targets)
         elif settings.local_classifier_model_path:
             routing = await local_chat_completion(
                 _local_classifier_options(settings.local_classifier_model_path),
-                [{"role": "system", "content": router_system}, {"role": "user", "content": redacted}],
+                [{"role": "system", "content": router_system}, {"role": "user", "content": run.redacted}],
                 temperature=0,
             )
-            selected, routing_reason = _choose_target(routing.content, targets)
+            run.selected, run.routing_reason = _choose_target(routing.content, targets)
         else:
-            selected, routing_reason = _default_choose_target(redacted, targets)
-
-        answer = await _invoke(
-            selected,
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "Answer the user helpfully. The supplied conversation has already been redacted; "
-                        "never request the original sensitive data."
-                        if redaction_applied
-                        else "Answer the user helpfully. The supplied conversation was not redacted; do not request unnecessary sensitive data."
-                    ),
-                },
-                {"role": "user", "content": redacted},
-            ],
-        )
-        prompt_tokens += answer.usage.prompt_tokens
-        completion_tokens += answer.usage.completion_tokens
-        total_cost += _cost(selected, answer.usage)
-        cost_known = cost_known and answer.usage.reported
-        total_cost = round(total_cost, 8)
-        call_id = _record_call(
-            user_id=user["id"], redactor_name=redactor_name, router_name=router_name, target_name=selected["name"],
-            redacted_message=redacted if redaction_applied else None, routing_reason=routing_reason, prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens, total_cost=total_cost, cost_known=cost_known, status_name="succeeded",
-        )
-        return {
-            "call_id": call_id,
-            "answer": answer.content,
-            "redacted_message": redacted if redaction_applied else None,
-            "redaction_applied": redaction_applied,
-            "selected_model": selected["name"],
-            "routing_reason": routing_reason,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_cost": total_cost,
-            "cost_known": cost_known,
-        }
+            run.selected, run.routing_reason = _default_choose_target(run.redacted, targets)
+        return _target_messages(run.redaction_applied, run.redacted)
     except (ProviderError, ValueError) as exc:
         safe_error = str(exc)[:300]
-        _record_call(
-            user_id=user["id"], redactor_name=redactor_name, router_name=router_name,
-            target_name=selected["name"] if selected else None,
-            redacted_message=redacted if redaction_verified and redaction_applied else None,
-            routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            total_cost=round(total_cost, 8), cost_known=cost_known, status_name="failed", error_message=safe_error,
-        )
+        _record_chat_failure(run, safe_error)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=safe_error) from exc
-    except Exception as exc:  # Keep implementation failures out of the client response and audit payload.
+    except Exception as exc:
         logger.exception("Unexpected chat pipeline failure")
-        _record_call(
-            user_id=user["id"], redactor_name=redactor_name, router_name=router_name,
-            target_name=selected["name"] if selected else None,
-            redacted_message=redacted if redaction_verified and redaction_applied else None,
-            routing_reason=routing_reason, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            total_cost=round(total_cost, 8), cost_known=cost_known, status_name="failed", error_message="Unexpected pipeline failure",
-        )
+        _record_chat_failure(run, "Unexpected pipeline failure")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected pipeline failure") from exc
+
+
+def _record_chat_failure(run: ChatRun, safe_error: str) -> int:
+    return _record_call(
+        user_id=run.user_id, redactor_name=run.redactor_name, router_name=run.router_name,
+        target_name=run.selected["name"] if run.selected else None,
+        redacted_message=run.redacted if run.redaction_verified and run.redaction_applied else None,
+        routing_reason=run.routing_reason, prompt_tokens=run.prompt_tokens, completion_tokens=run.completion_tokens,
+        total_cost=round(run.total_cost, 8), cost_known=run.cost_known, status_name="failed", error_message=safe_error,
+    )
+
+
+async def _stream_chat_events(run: ChatRun, target_messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    answer_parts: list[str] = []
+    yield _sse(
+        "meta",
+        {
+            "redacted_message": run.redacted if run.redaction_applied else None,
+            "redaction_applied": run.redaction_applied,
+            "selected_model": run.selected["name"],
+            "routing_reason": run.routing_reason,
+        },
+    )
+    try:
+        async for chunk in _stream_invoke(run.selected, target_messages):
+            if chunk.content:
+                answer_parts.append(chunk.content)
+                yield _sse("delta", {"content": chunk.content})
+            if chunk.usage:
+                run.prompt_tokens += chunk.usage.prompt_tokens
+                run.completion_tokens += chunk.usage.completion_tokens
+                run.total_cost += _cost(run.selected, chunk.usage)
+                run.cost_known = run.cost_known and chunk.usage.reported
+        answer = "".join(answer_parts).strip()
+        if not answer:
+            raise ProviderError("Model provider returned an empty streaming response")
+        run.total_cost = round(run.total_cost, 8)
+        call_id = _record_call(
+            user_id=run.user_id, redactor_name=run.redactor_name, router_name=run.router_name, target_name=run.selected["name"],
+            redacted_message=run.redacted if run.redaction_applied else None, routing_reason=run.routing_reason, prompt_tokens=run.prompt_tokens,
+            completion_tokens=run.completion_tokens, total_cost=run.total_cost, cost_known=run.cost_known, status_name="succeeded",
+        )
+        yield _sse("done", _chat_result(run, answer, call_id))
+    except (ProviderError, ValueError) as exc:
+        safe_error = str(exc)[:300]
+        _record_chat_failure(run, safe_error)
+        yield _sse("error", {"detail": safe_error})
+    except Exception:
+        logger.exception("Unexpected streaming chat pipeline failure")
+        _record_chat_failure(run, "Unexpected pipeline failure")
+        yield _sse("error", {"detail": "Unexpected pipeline failure"})
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(
+    payload: ChatRequest,
+    user: Annotated[dict[str, Any], Depends(csrf_user)],
+) -> StreamingResponse:
+    run = ChatRun(user_id=user["id"])
+    target_messages = await _prepare_chat_run(payload, user, run)
+    return StreamingResponse(
+        _stream_chat_events(run, target_messages),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/v1/models")
@@ -1367,15 +1474,22 @@ def openai_models(_: Annotated[dict[str, Any], Depends(service_api_user)]) -> di
     }
 
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", response_model=None)
 async def openai_chat_completions(
     payload: OpenAIChatCompletionRequest,
     user: Annotated[dict[str, Any], Depends(service_api_user)],
-) -> dict[str, Any]:
+) -> Any:
     if payload.stream:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="stream=true is not supported yet; use a non-streaming OpenAI chat-completions request",
+        run = ChatRun(user_id=user["id"])
+        target_messages = await _prepare_chat_run(
+            ChatRequest(message=_openai_messages_to_conversation(payload.messages)),
+            user,
+            run,
+        )
+        return StreamingResponse(
+            _openai_stream_events(run, target_messages, payload.model),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     routed = await chat(ChatRequest(message=_openai_messages_to_conversation(payload.messages)), user)
     return {
@@ -1396,3 +1510,61 @@ async def openai_chat_completions(
             "total_tokens": routed["prompt_tokens"] + routed["completion_tokens"],
         },
     }
+
+
+async def _openai_stream_events(
+    run: ChatRun,
+    target_messages: list[dict[str, str]],
+    model: str,
+) -> AsyncIterator[str]:
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
+
+    def chunk(delta: dict[str, Any], finish_reason: str | None = None, usage: dict[str, int] | None = None) -> str:
+        payload: dict[str, Any] = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        if usage is not None:
+            payload["usage"] = usage
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    answer_parts: list[str] = []
+    yield chunk({"role": "assistant"})
+    try:
+        async for provider_chunk in _stream_invoke(run.selected, target_messages):
+            if provider_chunk.content:
+                answer_parts.append(provider_chunk.content)
+                yield chunk({"content": provider_chunk.content})
+            if provider_chunk.usage:
+                run.prompt_tokens += provider_chunk.usage.prompt_tokens
+                run.completion_tokens += provider_chunk.usage.completion_tokens
+                run.total_cost += _cost(run.selected, provider_chunk.usage)
+                run.cost_known = run.cost_known and provider_chunk.usage.reported
+        answer = "".join(answer_parts).strip()
+        if not answer:
+            raise ProviderError("Model provider returned an empty streaming response")
+        run.total_cost = round(run.total_cost, 8)
+        _record_call(
+            user_id=run.user_id, redactor_name=run.redactor_name, router_name=run.router_name, target_name=run.selected["name"],
+            redacted_message=run.redacted if run.redaction_applied else None, routing_reason=run.routing_reason, prompt_tokens=run.prompt_tokens,
+            completion_tokens=run.completion_tokens, total_cost=run.total_cost, cost_known=run.cost_known, status_name="succeeded",
+        )
+        usage = {
+            "prompt_tokens": run.prompt_tokens,
+            "completion_tokens": run.completion_tokens,
+            "total_tokens": run.prompt_tokens + run.completion_tokens,
+        }
+        yield chunk({}, "stop", usage)
+    except (ProviderError, ValueError) as exc:
+        safe_error = str(exc)[:300]
+        _record_chat_failure(run, safe_error)
+        yield chunk({"content": f"\n[ERROR] {safe_error}"}, "stop")
+    except Exception:
+        logger.exception("Unexpected OpenAI streaming chat pipeline failure")
+        _record_chat_failure(run, "Unexpected pipeline failure")
+        yield chunk({"content": "\n[ERROR] Unexpected pipeline failure"}, "stop")
+    yield "data: [DONE]\n\n"
