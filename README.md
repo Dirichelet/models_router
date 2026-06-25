@@ -122,17 +122,18 @@ print(response.choices[0].message.content)
 1. 生成本地部署环境变量：
 
    ```bash
-   {
-     uv run python -c "from cryptography.fernet import Fernet; print('FERNET_KEY=' + Fernet.generate_key().decode())"
-     printf 'BOOTSTRAP_TOKEN=%s\n' "$(openssl rand -hex 32)"
-     cat <<'EOF'
-   APP_ENV=production
-   COOKIE_SECURE=false
-   TRUSTED_HOSTS=localhost,127.0.0.1
-   MAX_MESSAGE_CHARS=200000
-   PROVIDER_TRUST_ENV=true
-   EOF
-   } > .env.local
+    FERNET_KEY="$(uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")"
+    BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+    
+    cat > .env.local <<EOF
+    FERNET_KEY=$FERNET_KEY
+    BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
+    APP_ENV=production
+    COOKIE_SECURE=true
+    TRUSTED_HOSTS=localhost,127.0.0.1,你的域名.com
+    MAX_MESSAGE_CHARS=200000
+    PROVIDER_TRUST_ENV=true
+    EOF
    ```
 
    `COOKIE_SECURE=false` 是因为本地方案使用 HTTP；`FERNET_KEY` 后续必须保持不变，否则已保存的 Provider API Key 无法解密。`.env.local` 不要提交到 Git。
