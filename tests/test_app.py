@@ -575,16 +575,17 @@ def test_modelscope_privacy_filter_is_downloaded_when_no_redactor_path_is_set(mo
     snapshot.mkdir(parents=True)
     calls = []
 
-    def fake_snapshot_download(model_id):
-        calls.append(model_id)
+    def fake_snapshot_download(model_id, cache_dir=None):
+        calls.append((model_id, Path(cache_dir)))
         return str(snapshot)
 
     monkeypatch.setitem(sys.modules, "modelscope", types.SimpleNamespace(snapshot_download=fake_snapshot_download))
     monkeypatch.delenv("LOCAL_REDACTOR_MODEL_PATH", raising=False)
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "data" / "models_router.db"))
     monkeypatch.setenv("LOCAL_REDACTOR_AUTO_DOWNLOAD", "true")
     settings = Settings.from_environment()
     assert settings.local_redactor_model_path == snapshot.resolve()
-    assert calls == ["openai-mirror/privacy-filter"]
+    assert calls == [("openai-mirror/privacy-filter", tmp_path / "data" / "modelscope")]
 
 
 def test_development_defaults_allow_workspace_preview_hosts(monkeypatch) -> None:

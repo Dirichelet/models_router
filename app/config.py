@@ -35,7 +35,7 @@ def _optional_model_directory(variable: str) -> Path | None:
     return path.resolve()
 
 
-def _modelscope_privacy_filter_directory() -> Path | None:
+def _modelscope_privacy_filter_directory(cache_dir: Path) -> Path | None:
     """Download and use the default local redaction model from ModelScope."""
     if not _as_bool(os.getenv("LOCAL_REDACTOR_AUTO_DOWNLOAD"), True):
         return None
@@ -43,7 +43,7 @@ def _modelscope_privacy_filter_directory() -> Path | None:
         from modelscope import snapshot_download
     except ImportError as exc:
         raise RuntimeError("modelscope is required to auto-download openai-mirror/privacy-filter") from exc
-    model_dir = Path(snapshot_download("openai-mirror/privacy-filter")).expanduser()
+    model_dir = Path(snapshot_download("openai-mirror/privacy-filter", cache_dir=cache_dir.expanduser())).expanduser()
     if not model_dir.is_dir():
         raise RuntimeError("ModelScope download did not return an existing privacy-filter directory")
     return model_dir.resolve()
@@ -109,6 +109,10 @@ class Settings:
         if not trusted_hosts:
             raise RuntimeError("TRUSTED_HOSTS must contain at least one host")
 
+        local_redactor_cache_dir = Path(
+            os.getenv("LOCAL_REDACTOR_CACHE_DIR", str(database_path.parent / "modelscope"))
+        ).expanduser()
+
         return cls(
             app_env=app_env,
             database_path=database_path,
@@ -118,7 +122,7 @@ class Settings:
             trusted_hosts=trusted_hosts,
             session_hours=int(os.getenv("SESSION_HOURS", "12")),
             max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "20000")),
-            local_redactor_model_path=_optional_model_directory("LOCAL_REDACTOR_MODEL_PATH") or _modelscope_privacy_filter_directory(),
+            local_redactor_model_path=_optional_model_directory("LOCAL_REDACTOR_MODEL_PATH") or _modelscope_privacy_filter_directory(local_redactor_cache_dir),
             local_chinese_ner_model_path=_optional_model_directory("LOCAL_CHINESE_NER_MODEL_PATH"),
             local_redactor_device=os.getenv("LOCAL_REDACTOR_DEVICE", "cpu").strip().lower(),
             local_redactor_min_score=_score_threshold("LOCAL_REDACTOR_MIN_SCORE", 0.5),

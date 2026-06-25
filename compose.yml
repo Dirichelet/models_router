@@ -9,6 +9,7 @@ services:
       FERNET_KEY: ${FERNET_KEY:?Set a new Fernet key in .env}
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set a random bootstrap token in .env}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set the public host name in .env}
+      LOCAL_REDACTOR_CACHE_DIR: /data/modelscope
     expose:
       - "8000"
     volumes:
