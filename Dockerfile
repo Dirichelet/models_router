@@ -8,7 +8,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY app ./app
-RUN pip install --upgrade pip && pip install .
+RUN pip install --upgrade pip && pip install .  -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 RUN useradd --create-home --uid 10001 appuser && mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
