@@ -8,6 +8,7 @@ dependencies = [
     "cryptography>=43.0,<46.0",
     "fastapi>=0.115,<1.0",
     "httpx[socks]>=0.27,<1.0",
+    "modelscope>=1.37.1",
     "torch>=2.12.1",
     "transformers>=5.12.1",
     "uvicorn[standard]>=0.30,<1.0",

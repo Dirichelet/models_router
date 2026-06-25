@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import asyncio
+import sys
+import types
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,6 +20,7 @@ os.environ["DATABASE_PATH"] = str(TEST_DATABASE)
 os.environ["FERNET_KEY"] = Fernet.generate_key().decode()
 os.environ["TRUSTED_HOSTS"] = "testserver"
 os.environ["HF_HOME"] = "/tmp/models-router-test-huggingface"
+os.environ["LOCAL_REDACTOR_AUTO_DOWNLOAD"] = "false"
 
 from app import main as application  # noqa: E402
 from app import redaction as local_redaction  # noqa: E402
@@ -567,18 +570,21 @@ def test_local_gguf_paths_are_loaded_only_from_environment(monkeypatch, tmp_path
     assert settings.local_classifier_model_path == classifier.resolve()
 
 
-def test_cached_privacy_filter_is_used_when_no_redactor_path_is_set(monkeypatch, tmp_path) -> None:
-    hub_cache = tmp_path / "hub"
-    revision = "test-revision"
-    snapshot = hub_cache / "models--openai--privacy-filter" / "snapshots" / revision
+def test_modelscope_privacy_filter_is_downloaded_when_no_redactor_path_is_set(monkeypatch, tmp_path) -> None:
+    snapshot = tmp_path / "modelscope" / "openai-mirror" / "privacy-filter"
     snapshot.mkdir(parents=True)
-    reference = hub_cache / "models--openai--privacy-filter" / "refs"
-    reference.mkdir(parents=True)
-    (reference / "main").write_text(revision, encoding="utf-8")
+    calls = []
+
+    def fake_snapshot_download(model_id):
+        calls.append(model_id)
+        return str(snapshot)
+
+    monkeypatch.setitem(sys.modules, "modelscope", types.SimpleNamespace(snapshot_download=fake_snapshot_download))
     monkeypatch.delenv("LOCAL_REDACTOR_MODEL_PATH", raising=False)
-    monkeypatch.setenv("HF_HUB_CACHE", str(hub_cache))
+    monkeypatch.setenv("LOCAL_REDACTOR_AUTO_DOWNLOAD", "true")
     settings = Settings.from_environment()
     assert settings.local_redactor_model_path == snapshot.resolve()
+    assert calls == ["openai-mirror/privacy-filter"]
 
 
 def test_development_defaults_allow_workspace_preview_hosts(monkeypatch) -> None:
