@@ -77,6 +77,13 @@ def _models_endpoint(base_url: str) -> str:
     return f"{normalized}/v1/models"
 
 
+def _provider_headers(api_key: str) -> dict[str, str]:
+    stripped = api_key.strip()
+    if not stripped:
+        return {}
+    return {"Authorization": f"Bearer {stripped}"}
+
+
 def _raise_for_provider_error(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
@@ -105,7 +112,7 @@ async def chat_completion(
         ) as client:
             response = await client.post(
                 _endpoint(base_url),
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers=_provider_headers(api_key),
                 json=request_body,
             )
     except httpx.HTTPError as exc:
@@ -139,7 +146,7 @@ async def available_models(*, base_url: str, api_key: str) -> list[str]:
         ) as client:
             response = await client.get(
                 _models_endpoint(base_url),
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers=_provider_headers(api_key),
             )
     except httpx.HTTPError as exc:
         raise ProviderError("Could not reach the configured model provider") from exc
