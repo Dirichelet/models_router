@@ -15,6 +15,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-width: 320px; background: radial-gradient(circle at 8% -10%, #164979 0, transparent 32rem), radial-gradient(circle at 90% 5%, #183662 0, transparent 27rem), var(--bg); }
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: linear-gradient(115deg, rgba(69,168,255,.08), transparent 35%, rgba(55,216,158,.06)); mask-image: radial-gradient(circle at 50% 0, #000 0, transparent 70%); }
 button, input, textarea, select { font: inherit; }
