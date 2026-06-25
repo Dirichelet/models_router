@@ -869,6 +869,8 @@ def test_openai_compatible_service_api_routes_agent_messages(monkeypatch) -> Non
             Completion('{"model_id": 2, "reason": "Suitable."}', Usage(10, 5)),
             Completion("Agent-compatible answer.", Usage(10, 5)),
             Completion('{"model_id": 2, "reason": "Stream suitable."}', Usage(7, 3)),
+            Completion('{"model_id": 2, "reason": "Long context suitable."}', Usage(12, 6)),
+            Completion("Long-context answer.", Usage(12, 6)),
         )
     )
 
@@ -931,6 +933,21 @@ def test_openai_compatible_service_api_routes_agent_messages(monkeypatch) -> Non
         assert '"content": "Streamed "' in streamed_text
         assert '"content": "answer."' in streamed_text
         assert "data: [DONE]" in streamed_text
+
+        long_context = "agent environment details\n" + ("x" * 25_000)
+        long_response = test_client.post(
+            "/v1/chat/completions",
+            headers=api_headers,
+            json={
+                "model": "models-router",
+                "messages": [
+                    {"role": "system", "content": long_context},
+                    {"role": "user", "content": "Use the environment details."},
+                ],
+            },
+        )
+        assert long_response.status_code == 200, long_response.text
+        assert long_response.json()["choices"][0]["message"]["content"] == "Long-context answer."
 
         revoked = test_client.delete("/api/service-key", headers=csrf)
         assert revoked.json() == {"revoked": True}

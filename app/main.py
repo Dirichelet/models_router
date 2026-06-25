@@ -25,7 +25,7 @@ from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import Settings
@@ -228,11 +228,11 @@ class KeywordRuleUpdate(BaseModel):
 
 class ChatHistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field(min_length=1, max_length=settings.max_message_chars)
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=20_000)
+    message: str = Field(min_length=1, max_length=settings.max_message_chars)
     context: list[ChatHistoryMessage] = Field(default_factory=list, max_length=16)
 
 
@@ -356,6 +356,17 @@ def _openai_messages_to_conversation(messages: list[OpenAIMessage]) -> str:
     if not conversation:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="messages must contain text content")
     return conversation
+
+
+def _chat_request_from_openai_messages(messages: list[OpenAIMessage]) -> ChatRequest:
+    conversation = _openai_messages_to_conversation(messages)
+    try:
+        return ChatRequest(message=conversation)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"messages exceed the configured limit of {settings.max_message_chars} characters",
+        ) from exc
 
 
 def csrf_user(
@@ -1482,7 +1493,7 @@ async def openai_chat_completions(
     if payload.stream:
         run = ChatRun(user_id=user["id"])
         target_messages = await _prepare_chat_run(
-            ChatRequest(message=_openai_messages_to_conversation(payload.messages)),
+            _chat_request_from_openai_messages(payload.messages),
             user,
             run,
         )
@@ -1491,7 +1502,7 @@ async def openai_chat_completions(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-    routed = await chat(ChatRequest(message=_openai_messages_to_conversation(payload.messages)), user)
+    routed = await chat(_chat_request_from_openai_messages(payload.messages), user)
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",

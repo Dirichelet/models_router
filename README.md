@@ -113,7 +113,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-服务实现了 `GET /v1/models` 和非流式 `POST /v1/chat/completions`，返回标准 `choices[0].message.content` 与 `usage`。文本内容数组、`system`、`assistant` 和 `tool` 消息会作为对话上下文处理；是否脱敏取决于当前脱敏配置。暂不支持 `stream=true` 或服务端工具执行。
+服务实现了 `GET /v1/models` 和 `POST /v1/chat/completions`，支持 `stream=true` 流式输出，非流式返回标准 `choices[0].message.content` 与 `usage`。文本内容数组、`system`、`assistant` 和 `tool` 消息会作为对话上下文处理；是否脱敏取决于当前脱敏配置。默认最大拼接上下文长度为 `MAX_MESSAGE_CHARS=200000`，适配 Kilo、OpenWebUI 等会发送较长 system prompt/environment details 的 agent 客户端。暂不执行客户端提交的工具调用。
 
 ## 公网部署（Docker Compose）
 

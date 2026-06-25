@@ -121,7 +121,7 @@ class Settings:
             cookie_secure=_as_bool(os.getenv("COOKIE_SECURE"), app_env == "production"),
             trusted_hosts=trusted_hosts,
             session_hours=int(os.getenv("SESSION_HOURS", "12")),
-            max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "20000")),
+            max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "200000")),
             local_redactor_model_path=_optional_model_directory("LOCAL_REDACTOR_MODEL_PATH") or _modelscope_privacy_filter_directory(local_redactor_cache_dir),
             local_chinese_ner_model_path=_optional_model_directory("LOCAL_CHINESE_NER_MODEL_PATH"),
             local_redactor_device=os.getenv("LOCAL_REDACTOR_DEVICE", "cpu").strip().lower(),
