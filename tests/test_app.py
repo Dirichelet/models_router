@@ -364,6 +364,9 @@ def test_local_regex_and_fuzzy_keyword_rules_mask_chinese_sensitive_text() -> No
     assert regex_count == 3
     assert "13800138000" not in regex_redacted
     assert "11010519491231002X" not in regex_redacted
+    intro_redacted, intro_count = _replace_regex("我叫张三，我的手机号是13800138000。My name is John Smith.")
+    assert intro_count == 3
+    assert intro_redacted == "我叫[PERSON]，我的手机号是[PHONE]。My name is [PERSON]."
     keyword_redacted, keyword_count = _replace_keywords(
         "项目 天-狼_星 正在上线",
         (KeywordRule(phrase="项目天狼星", replacement="[PROJECT]", fuzzy=True),),
@@ -395,6 +398,14 @@ def test_model_spans_accept_transformers_numeric_scores() -> None:
     )
     assert merged_count == 1
     assert merged == "My name is [PERSON]."
+
+    trimmed, trimmed_count = _apply_model_spans(
+        "My name is Alice Smith.",
+        [{"entity_group": "private_person", "score": 0.99, "start": 10, "end": 22}],
+        0.5,
+    )
+    assert trimmed_count == 1
+    assert trimmed == "My name is [PERSON]."
 
     protected, protected_count = _apply_model_spans(
         "Contact [EMAIL] for Alice.",

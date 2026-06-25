@@ -452,6 +452,11 @@ $("#chat-form").addEventListener("submit", async (event) => {
     await refreshCalls();
   } catch (error) { appendChat("assistant", `调用失败：${error.message}`); await refreshCalls(); } finally { button.disabled = false; }
 });
+$("#chat-message").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return;
+  event.preventDefault();
+  if (!$("#chat-submit").disabled) $("#chat-form").requestSubmit();
+});
 $("#clear-chat-context").addEventListener("click", () => {
   state.chatHistory = [];
   $("#chat-output").innerHTML = '<div class="empty-state">上下文已清除。后续消息将作为新的对话发送。</div>';

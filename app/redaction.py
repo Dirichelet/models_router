@@ -51,6 +51,7 @@ _REGEX_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 # and inspectable. They cover the fields present in MultiPriv-PII's natural
 # paragraphs as well as the equivalent operational text formats.
 _CONTEXT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?:我叫|我是|本人叫|本人是|姓名是|名字是|我的名字是|我的名字叫)(?P<pii>(?!学生|老师|医生|护士|工程师|程序员|开发者|用户|客服|司机|律师|经理|老板|助理)[\u4e00-\u9fa5]{2,4})(?=，|。|,|\.|\s|$|的)"), "[PERSON]"),
     (re.compile(r"(?m)(?P<pii>[\u4e00-\u9fa5]{2,4})(?=是一(?:位|名)|，\d{1,3}岁)"), "[PERSON]"),
     (re.compile(r"(?<![\u4e00-\u9fa5])(?P<pii>(?![他她其最近目现的])[\u4e00-\u9fa5]{2,3})(?=的(?:信用|年收入|身份证|财务|近期|目前|交易|个人信息))"), "[PERSON]"),
     (re.compile(r"(?<![\u4e00-\u9fa5])(?P<pii>(?![他她其最近目现的])[\u4e00-\u9fa5]{2,3})(?=(?:年收入|信用评分|因出现|近期出现))"), "[PERSON]"),
@@ -76,6 +77,7 @@ _CONTEXT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?P<pii>中国工商银行[\u4e00-\u9fa5\s]*(?:转账(?:交易号|流水号)?\s*)?STL\d+)"), "[TRANSACTION]"),
     (re.compile(r"(?P<pii>INDO GIBL Indiaforensic STL\d+)", re.IGNORECASE), "[TRANSACTION]"),
     (re.compile(r"(?P<pii>FDRL/INTERNAL FUND TRANSFE)", re.IGNORECASE), "[TRANSACTION]"),
+    (re.compile(r"(?:my name is|name is|i am|i'm|this is|name:)\s+(?P<pii>[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)(?=,|\.|\s|$)", re.IGNORECASE), "[PERSON]"),
     (re.compile(r"(?m)(?P<pii>[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)(?=\s+is\s+a\s+\d|,\s+a\s+\d)"), "[PERSON]"),
     (re.compile(r"(?:Dr\.\s|doctor,\s|care of Dr\.\s)(?P<pii>[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)"), "[PERSON]"),
     (re.compile(r"(?P<pii>[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+)(?='s\s+(?:credit|income|doctor|email|phone|ID|recent|financial|annual))"), "[PERSON]"),
@@ -192,6 +194,11 @@ def _apply_model_spans(text: str, predictions: list[dict[str, Any]], min_score: 
             score = float(raw_score)
         except (TypeError, ValueError):
             continue
+        if isinstance(start, int) and isinstance(end, int):
+            while start < end and text[start].isspace():
+                start += 1
+            while end > start and text[end - 1].isspace():
+                end -= 1
         if (
             not placeholder
             or score < min_score

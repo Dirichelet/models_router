@@ -49,7 +49,7 @@
           <article class="panel chat-panel">
             <div class="panel-heading"><div><p class="eyebrow">PRIVATE CHAT</p><h2>发送消息</h2></div><div class="model-actions"><button id="clear-chat-context" class="ghost" type="button">清除上下文</button><span id="pipeline-status" class="status-pill">检查配置中…</span></div></div>
             <div id="chat-output" class="chat-output" aria-live="polite"><div class="empty-state">配置至少一个目标模型后即可聊天。脱敏与路由模型均可选；未配置时分别使用不脱敏和默认难度/费率路由。</div></div>
-            <form id="chat-form" class="chat-form"><label class="sr-only" for="chat-message">消息</label><textarea id="chat-message" name="message" maxlength="20000" placeholder="在此输入消息；原始消息不会写入调用记录。" required></textarea><button id="chat-submit" class="primary" type="submit">脱敏并发送</button></form>
+            <form id="chat-form" class="chat-form"><label class="sr-only" for="chat-message">消息</label><div class="chat-input-stack"><textarea id="chat-message" name="message" maxlength="20000" placeholder="在此输入消息；原始消息不会写入调用记录。" required></textarea><span class="field-hint">Enter 发送，Shift + Enter 换行。</span></div><button id="chat-submit" class="primary" type="submit">脱敏并发送</button></form>
           </article>
         </section>
 
