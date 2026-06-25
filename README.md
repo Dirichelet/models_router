@@ -115,6 +115,98 @@ print(response.choices[0].message.content)
 
 服务实现了 `GET /v1/models` 和 `POST /v1/chat/completions`，支持 `stream=true` 流式输出，非流式返回标准 `choices[0].message.content` 与 `usage`。文本内容数组、`system`、`assistant` 和 `tool` 消息会作为对话上下文处理；是否脱敏取决于当前脱敏配置。默认最大拼接上下文长度为 `MAX_MESSAGE_CHARS=200000`，适配 Kilo、OpenWebUI 等会发送较长 system prompt/environment details 的 agent 客户端。暂不执行客户端提交的工具调用。
 
+## 仅本地 Agent 调用（Docker Compose）
+
+如果这个服务只给同一台机器上的 Kilo、OpenWebUI、Dify、其它 agent 或本机脚本调用，不需要 Caddy、域名、HTTPS 和公网 80/443 端口。推荐单独创建一个本地 Compose 文件，只发布到宿主机回环地址 `127.0.0.1`。
+
+1. 生成本地部署环境变量：
+
+   ```bash
+   {
+     uv run python -c "from cryptography.fernet import Fernet; print('FERNET_KEY=' + Fernet.generate_key().decode())"
+     printf 'BOOTSTRAP_TOKEN=%s\n' "$(openssl rand -hex 32)"
+     cat <<'EOF'
+   APP_ENV=production
+   COOKIE_SECURE=false
+   TRUSTED_HOSTS=localhost,127.0.0.1
+   MAX_MESSAGE_CHARS=200000
+   PROVIDER_TRUST_ENV=true
+   EOF
+   } > .env.local
+   ```
+
+   `COOKIE_SECURE=false` 是因为本地方案使用 HTTP；`FERNET_KEY` 后续必须保持不变，否则已保存的 Provider API Key 无法解密。`.env.local` 不要提交到 Git。
+
+2. 创建本地专用 Compose 文件：
+
+   ```bash
+   cat > compose.local.yml <<'EOF'
+   services:
+     app:
+       build: .
+       restart: unless-stopped
+       ports:
+         - "127.0.0.1:9900:8000"
+       environment:
+         APP_ENV: ${APP_ENV:-production}
+         COOKIE_SECURE: ${COOKIE_SECURE:-false}
+         DATABASE_PATH: /data/models_router.db
+         FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env.local}
+         BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set BOOTSTRAP_TOKEN in .env.local}
+         TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1}
+         MAX_MESSAGE_CHARS: ${MAX_MESSAGE_CHARS:-200000}
+         PROVIDER_TRUST_ENV: ${PROVIDER_TRUST_ENV:-true}
+         LOCAL_REDACTOR_CACHE_DIR: /data/modelscope
+         LOCAL_REDACTOR_AUTO_DOWNLOAD: "true"
+       volumes:
+         - router_data:/data
+       security_opt:
+         - no-new-privileges:true
+       cap_drop:
+         - ALL
+       read_only: true
+       tmpfs:
+         - /tmp
+
+   volumes:
+     router_data:
+   EOF
+   ```
+
+3. 启动：
+
+   ```bash
+   docker compose --env-file .env.local -f compose.local.yml up --build -d
+   ```
+
+4. 首次打开控制台：
+
+   ```text
+   http://127.0.0.1:9900
+   ```
+
+   使用 `.env.local` 中的 `BOOTSTRAP_TOKEN` 创建管理员账号，在网页里配置至少一个目标模型，然后到“服务 API”页签生成 `mr_...` API Key。
+
+5. 本机其它 agent 的 OpenAI 兼容配置：
+
+   ```text
+   Base URL: http://127.0.0.1:9900/v1
+   API Key:  mr_服务API页面生成的Key
+   Model:    models-router
+   ```
+
+   这个端口只绑定 `127.0.0.1`，局域网和公网不能直接访问。如果 agent 也跑在同一个 Compose 项目或同一个 Docker network 里，可以不通过宿主机端口，直接使用容器内地址 `http://app:8000/v1`；如果是另一个独立 Compose 项目，建议把两个服务加入同一个 external network，并给本服务设置固定 network alias，再让 agent 访问 `http://models-router:8000/v1`。
+
+常用维护命令：
+
+```bash
+docker compose --env-file .env.local -f compose.local.yml logs -f app
+docker compose --env-file .env.local -f compose.local.yml ps
+docker compose --env-file .env.local -f compose.local.yml down
+```
+
+只停止服务不会删除 `router_data` 卷；模型配置、管理员账号、服务 API Key 和 ModelScope 脱敏模型缓存都会保留。如需彻底清空本地部署数据，确认无误后再执行 `docker compose --env-file .env.local -f compose.local.yml down -v`。
+
 ## 公网部署（Docker Compose）
 
 1. 复制环境变量模板并设置公网域名、ACME 邮箱、新的 `FERNET_KEY` 与随机 `BOOTSTRAP_TOKEN`：
