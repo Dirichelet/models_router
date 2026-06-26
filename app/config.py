@@ -63,6 +63,7 @@ class Settings:
     fernet_key: str
     bootstrap_token: str
     cookie_secure: bool
+    force_https: bool
     trusted_hosts: list[str]
     session_hours: int
     max_message_chars: int
@@ -112,13 +113,15 @@ class Settings:
         local_redactor_cache_dir = Path(
             os.getenv("LOCAL_REDACTOR_CACHE_DIR", str(database_path.parent / "modelscope"))
         ).expanduser()
+        cookie_secure = _as_bool(os.getenv("COOKIE_SECURE"), app_env == "production")
 
         return cls(
             app_env=app_env,
             database_path=database_path,
             fernet_key=fernet_key,
             bootstrap_token=bootstrap_token,
-            cookie_secure=_as_bool(os.getenv("COOKIE_SECURE"), app_env == "production"),
+            cookie_secure=cookie_secure,
+            force_https=_as_bool(os.getenv("FORCE_HTTPS"), app_env == "production" and cookie_secure),
             trusted_hosts=trusted_hosts,
             session_hours=int(os.getenv("SESSION_HOURS", "12")),
             max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "200000")),

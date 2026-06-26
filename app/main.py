@@ -257,7 +257,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Models Router", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
-if settings.app_env == "production":
+if settings.force_https:
     app.add_middleware(HTTPSRedirectMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -122,21 +122,24 @@ print(response.choices[0].message.content)
 1. 生成本地部署环境变量：
 
    ```bash
-    FERNET_KEY="$(python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")"
-    BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
-    
-    cat > .env.local <<EOF
-    FERNET_KEY=$FERNET_KEY
-    BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
-    APP_ENV=production
-    COOKIE_SECURE=false
-    TRUSTED_HOSTS=localhost,127.0.0.1
-    MAX_MESSAGE_CHARS=200000
-    PROVIDER_TRUST_ENV=true
-    EOF
+   FERNET_KEY="$(python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")"
+   BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+
+   cat > .env.local <<EOF
+   FERNET_KEY=$FERNET_KEY
+   BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
+   APP_ENV=production
+   COOKIE_SECURE=false
+   FORCE_HTTPS=false
+   TRUSTED_HOSTS=localhost,127.0.0.1
+   MAX_MESSAGE_CHARS=200000
+   PROVIDER_TRUST_ENV=true
+   EOF
+
+   chmod 600 .env.local
    ```
 
-   `COOKIE_SECURE=false` 是因为本地方案使用 HTTP；`FERNET_KEY` 后续必须保持不变，否则已保存的 Provider API Key 无法解密。`.env.local` 不要提交到 Git。
+   `COOKIE_SECURE=false` 和 `FORCE_HTTPS=false` 是因为本地方案使用 HTTP；`FERNET_KEY` 后续必须保持不变，否则已保存的 Provider API Key 无法解密。`.env.local` 不要提交到 Git。
 
 2. 校验本地 Compose 配置：
 
@@ -155,6 +158,13 @@ print(response.choices[0].message.content)
 
    ```bash
    sudo usermod -aG docker "$USER"
+   ```
+
+   启动后检查健康状态：
+
+   ```bash
+   docker compose --env-file .env.local -f compose.local.yml ps
+   curl -fsS http://127.0.0.1:9900/api/health
    ```
 
 4. 首次打开控制台：
@@ -187,6 +197,8 @@ docker compose --env-file .env.local -f compose.local.yml down
 
 ## 公网部署（Docker Compose）
 
+公网部署使用主 `compose.yml`，它会启动应用容器和 Caddy。Caddy 负责公网 80/443、自动 HTTPS 证书和反向代理；应用容器不直接发布端口，也不在容器内强制 HTTPS 跳转，避免反代循环重定向。
+
 1. 复制环境变量模板并设置公网域名、ACME 邮箱、新的 `FERNET_KEY` 与随机 `BOOTSTRAP_TOKEN`：
 
    ```bash
@@ -196,6 +208,7 @@ docker compose --env-file .env.local -f compose.local.yml down
 2. 为 `CADDY_DOMAIN` 配置 DNS A/AAAA 记录，并启动：
 
    ```bash
+   docker compose config
    docker compose up --build -d
    ```
 

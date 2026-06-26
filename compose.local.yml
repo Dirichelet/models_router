@@ -8,6 +8,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      FORCE_HTTPS: ${FORCE_HTTPS:-false}
       DATABASE_PATH: /data/models_router.db
       FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env.local}
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set BOOTSTRAP_TOKEN in .env.local}
@@ -22,6 +23,12 @@ services:
       XDG_CACHE_HOME: /data/cache
     volumes:
       - router_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     security_opt:
       - no-new-privileges:true
     cap_drop:

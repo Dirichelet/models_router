@@ -594,6 +594,25 @@ def test_development_defaults_allow_workspace_preview_hosts(monkeypatch) -> None
     assert application.Settings.from_environment().trusted_hosts == ["*"]
 
 
+def test_force_https_defaults_for_direct_production_and_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FERNET_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("BOOTSTRAP_TOKEN", "a" * 32)
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    monkeypatch.setenv("TRUSTED_HOSTS", "localhost,127.0.0.1")
+    monkeypatch.delenv("FORCE_HTTPS", raising=False)
+    assert Settings.from_environment().force_https is True
+    monkeypatch.setenv("FORCE_HTTPS", "false")
+    assert Settings.from_environment().force_https is False
+
+
+def test_health_endpoint_is_available_without_authentication() -> None:
+    with client() as test_client:
+        response = test_client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+
 def test_console_is_hidden_before_authentication() -> None:
     stylesheet = (Path(__file__).resolve().parent.parent / "app" / "static" / "styles.css").read_text(encoding="utf-8")
     assert ".app-shell[hidden] { display: none; }" in stylesheet

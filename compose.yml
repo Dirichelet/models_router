@@ -2,18 +2,33 @@ services:
   app:
     build: .
     restart: unless-stopped
+    init: true
     environment:
       APP_ENV: ${APP_ENV:-production}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      FORCE_HTTPS: ${FORCE_HTTPS:-false}
       DATABASE_PATH: /data/models_router.db
       FERNET_KEY: ${FERNET_KEY:?Set a new Fernet key in .env}
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set a random bootstrap token in .env}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set the public host name in .env}
+      MAX_MESSAGE_CHARS: ${MAX_MESSAGE_CHARS:-200000}
+      PROVIDER_TRUST_ENV: ${PROVIDER_TRUST_ENV:-true}
       LOCAL_REDACTOR_CACHE_DIR: /data/modelscope
+      LOCAL_REDACTOR_AUTO_DOWNLOAD: ${LOCAL_REDACTOR_AUTO_DOWNLOAD:-true}
+      HOME: /data/home
+      HF_HOME: /data/huggingface
+      MODELSCOPE_CACHE: /data/modelscope
+      XDG_CACHE_HOME: /data/cache
     expose:
       - "8000"
     volumes:
       - router_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -26,7 +41,8 @@ services:
     image: caddy:2.8-alpine
     restart: unless-stopped
     depends_on:
-      - app
+      app:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"
