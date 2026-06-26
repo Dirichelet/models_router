@@ -117,20 +117,20 @@ print(response.choices[0].message.content)
 
 ## 仅本地 Agent 调用（Docker Compose）
 
-如果这个服务只给同一台机器上的 Kilo、OpenWebUI、Dify、其它 agent 或本机脚本调用，不需要 Caddy、域名、HTTPS 和公网 80/443 端口。推荐单独创建一个本地 Compose 文件，只发布到宿主机回环地址 `127.0.0.1`。
+如果这个服务只给同一台宿主机上的 Kilo、OpenWebUI、Dify、其它 agent 或本机脚本调用，不需要域名、Caddy、HTTPS 和公网 80/443 端口。仓库提供了 `compose.local.yml`，它只把服务发布到宿主机回环地址 `127.0.0.1`，局域网和公网都不能直接访问。
 
 1. 生成本地部署环境变量：
 
    ```bash
-    FERNET_KEY="$(uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")"
+    FERNET_KEY="$(python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")"
     BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
     
     cat > .env.local <<EOF
     FERNET_KEY=$FERNET_KEY
     BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
     APP_ENV=production
-    COOKIE_SECURE=true
-    TRUSTED_HOSTS=localhost,127.0.0.1,你的域名.com
+    COOKIE_SECURE=false
+    TRUSTED_HOSTS=localhost,127.0.0.1
     MAX_MESSAGE_CHARS=200000
     PROVIDER_TRUST_ENV=true
     EOF
@@ -138,46 +138,23 @@ print(response.choices[0].message.content)
 
    `COOKIE_SECURE=false` 是因为本地方案使用 HTTP；`FERNET_KEY` 后续必须保持不变，否则已保存的 Provider API Key 无法解密。`.env.local` 不要提交到 Git。
 
-2. 创建本地专用 Compose 文件：
+2. 校验本地 Compose 配置：
 
    ```bash
-   cat > compose.local.yml <<'EOF'
-   services:
-     app:
-       build: .
-       restart: unless-stopped
-       ports:
-         - "127.0.0.1:9900:8000"
-       environment:
-         APP_ENV: ${APP_ENV:-production}
-         COOKIE_SECURE: ${COOKIE_SECURE:-false}
-         DATABASE_PATH: /data/models_router.db
-         FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env.local}
-         BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set BOOTSTRAP_TOKEN in .env.local}
-         TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1}
-         MAX_MESSAGE_CHARS: ${MAX_MESSAGE_CHARS:-200000}
-         PROVIDER_TRUST_ENV: ${PROVIDER_TRUST_ENV:-true}
-         LOCAL_REDACTOR_CACHE_DIR: /data/modelscope
-         LOCAL_REDACTOR_AUTO_DOWNLOAD: "true"
-       volumes:
-         - router_data:/data
-       security_opt:
-         - no-new-privileges:true
-       cap_drop:
-         - ALL
-       read_only: true
-       tmpfs:
-         - /tmp
-
-   volumes:
-     router_data:
-   EOF
+   docker compose --env-file .env.local -f compose.local.yml config
    ```
 
 3. 启动：
 
    ```bash
    docker compose --env-file .env.local -f compose.local.yml up --build -d
+   ```
+
+   默认宿主机端口是 `9900`。如果被占用，在 `.env.local` 里增加一行 `LOCAL_PORT=9911` 后重启。
+   如果 `docker ps` 或启动时报 `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`，说明当前 Linux 用户没有 Docker daemon 权限。把当前用户加入 `docker` 组并重新登录 SSH：
+
+   ```bash
+   sudo usermod -aG docker "$USER"
    ```
 
 4. 首次打开控制台：
@@ -196,7 +173,7 @@ print(response.choices[0].message.content)
    Model:    models-router
    ```
 
-   这个端口只绑定 `127.0.0.1`，局域网和公网不能直接访问。如果 agent 也跑在同一个 Compose 项目或同一个 Docker network 里，可以不通过宿主机端口，直接使用容器内地址 `http://app:8000/v1`；如果是另一个独立 Compose 项目，建议把两个服务加入同一个 external network，并给本服务设置固定 network alias，再让 agent 访问 `http://models-router:8000/v1`。
+   这里的 `127.0.0.1` 指宿主机。宿主机上的客户端、脚本和 agent 都用这个地址。如果 agent 也跑在同一个 Compose 项目或同一个 Docker network 里，可以不通过宿主机端口，直接使用容器内地址 `http://app:8000/v1`；如果是另一个独立 Compose 项目，建议把两个服务加入同一个 external network，并给本服务设置固定 network alias，再让 agent 访问 `http://models-router:8000/v1`。
 
 常用维护命令：
 

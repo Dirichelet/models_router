@@ -1,0 +1,34 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${LOCAL_PORT:-9900}:8000"
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DATABASE_PATH: /data/models_router.db
+      FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env.local}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set BOOTSTRAP_TOKEN in .env.local}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1}
+      MAX_MESSAGE_CHARS: ${MAX_MESSAGE_CHARS:-200000}
+      PROVIDER_TRUST_ENV: ${PROVIDER_TRUST_ENV:-true}
+      LOCAL_REDACTOR_CACHE_DIR: /data/modelscope
+      LOCAL_REDACTOR_AUTO_DOWNLOAD: ${LOCAL_REDACTOR_AUTO_DOWNLOAD:-true}
+      HOME: /data/home
+      HF_HOME: /data/huggingface
+      MODELSCOPE_CACHE: /data/modelscope
+      XDG_CACHE_HOME: /data/cache
+    volumes:
+      - router_data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  router_data:
