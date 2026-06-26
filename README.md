@@ -154,11 +154,6 @@ print(response.choices[0].message.content)
    ```
 
    默认宿主机端口是 `9900`。如果被占用，在 `.env.local` 里增加一行 `LOCAL_PORT=9911` 后重启。
-   如果 `docker ps` 或启动时报 `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`，说明当前 Linux 用户没有 Docker daemon 权限。把当前用户加入 `docker` 组并重新登录 SSH：
-
-   ```bash
-   sudo usermod -aG docker "$USER"
-   ```
 
    启动后检查健康状态：
 
